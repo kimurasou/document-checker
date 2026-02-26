@@ -43,7 +43,7 @@
 
     .container {
       width: 100%;
-      max-width: 900px;
+      max-width: 960px;
       padding: 20px;
       flex: 1;
     }
@@ -383,12 +383,135 @@
 
     .cpl-match { color: #22c55e; }
     .cpl-mismatch { color: #f87171; }
+
+    /* ===== 書式・注意事項チェックセクション ===== */
+    .format-check-section {
+      width: 100%;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .format-check-section h2 {
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+    }
+
+    .check-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .check-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      background: #0f172a;
+      border-radius: 10px;
+      padding: 14px 16px;
+      border-left: 4px solid transparent;
+    }
+
+    .check-item.pass {
+      border-left-color: #22c55e;
+    }
+
+    .check-item.fail {
+      border-left-color: #f87171;
+    }
+
+    .check-item.warn {
+      border-left-color: #eab308;
+    }
+
+    .check-item.unknown {
+      border-left-color: #64748b;
+    }
+
+    .check-badge {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+
+    .check-badge.pass { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+    .check-badge.fail { background: rgba(248, 113, 113, 0.2); color: #f87171; }
+    .check-badge.warn { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+    .check-badge.unknown { background: rgba(100, 116, 139, 0.2); color: #94a3b8; }
+
+    .check-body {
+      flex: 1;
+    }
+
+    .check-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .check-detail {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+
+    .check-detail.fail-detail {
+      color: #fca5a5;
+    }
+
+    .check-detail.warn-detail {
+      color: #fde68a;
+    }
+
+    .check-summary {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .summary-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #0f172a;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 0.85rem;
+    }
+
+    .summary-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .summary-dot.pass { background: #22c55e; }
+    .summary-dot.fail { background: #f87171; }
+    .summary-dot.warn { background: #eab308; }
+    .summary-dot.unknown { background: #64748b; }
+
+    /* 半角文字ハイライト */
+    .hankaku-highlight {
+      background: rgba(248, 113, 113, 0.3);
+      color: #fca5a5;
+      border-radius: 2px;
+      padding: 0 2px;
+      font-family: monospace;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>ビジネス文書検定 採点補助ツール</h1>
-    <p>Word解答と模範解答PDFを比較して差分を表示します</p>
+    <p>Word解答と模範解答PDFを比較・書式チェックします</p>
   </header>
 
   <div class="container">
@@ -412,7 +535,7 @@
 
       <p class="error-msg" id="error-msg"></p>
 
-      <button class="btn" id="compare-btn" onclick="compare()">比較する</button>
+      <button class="btn" id="compare-btn" onclick="compare()">比較・チェックする</button>
     </div>
 
     <!-- Loading Screen -->
@@ -426,6 +549,13 @@
       <div class="match-rate-card">
         <h2>一致率</h2>
         <div class="match-rate-value" id="match-rate">--</div>
+      </div>
+
+      <!-- 書式設定・注意事項チェック -->
+      <div class="format-check-section">
+        <h2>書式設定・注意事項チェック</h2>
+        <div class="check-summary" id="check-summary"></div>
+        <div class="check-list" id="check-list"></div>
       </div>
 
       <div class="line-stats">
@@ -559,12 +689,11 @@
         const items = content.items;
         if (items.length === 0) continue;
 
-        // Sort items by Y (descending = top to bottom), then X (ascending = left to right)
         const sorted = items.slice().sort((a, b) => {
           const ay = Math.round(a.transform[5]);
           const by = Math.round(b.transform[5]);
-          if (Math.abs(ay - by) > 3) return by - ay; // higher Y = earlier in page
-          return a.transform[4] - b.transform[4]; // left to right
+          if (Math.abs(ay - by) > 3) return by - ay;
+          return a.transform[4] - b.transform[4];
         });
 
         let lastY = null;
@@ -589,20 +718,470 @@
       return result.value.trim();
     }
 
+    // ===== Wordファイルの詳細情報を取得（書式チェック用）=====
+    async function extractWordDetails(file) {
+      const details = {
+        charsPerLine: null,
+        fontNames: [],
+        hasProportionalFont: false,
+        headerText: '',
+        headerAlign: null,
+        bodyText: '',
+        rawXml: ''
+      };
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+        const parser = new DOMParser();
+        const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+        // ---- document.xml ----
+        const docXml = await zip.file('word/document.xml').async('string');
+        details.rawXml = docXml;
+        const doc = parser.parseFromString(docXml, 'text/xml');
+
+        // ページ設定から1行文字数を計算
+        const pgSz = doc.getElementsByTagNameNS(ns, 'pgSz')[0];
+        const pgMar = doc.getElementsByTagNameNS(ns, 'pgMar')[0];
+        let fontSizeHalfPt = 21;
+
+        const stylesFile = zip.file('word/styles.xml');
+        if (stylesFile) {
+          const stylesXml = await stylesFile.async('string');
+          const styleDoc = parser.parseFromString(stylesXml, 'text/xml');
+          const docDefaults = styleDoc.getElementsByTagNameNS(ns, 'docDefaults')[0];
+          if (docDefaults) {
+            const sz = docDefaults.getElementsByTagNameNS(ns, 'sz')[0];
+            if (sz) fontSizeHalfPt = parseInt(sz.getAttribute('w:val')) || 21;
+          }
+        }
+
+        if (pgSz && pgMar) {
+          const pageWidth = parseInt(pgSz.getAttribute('w:w')) || 11906;
+          const marginLeft = parseInt(pgMar.getAttribute('w:left')) || 1701;
+          const marginRight = parseInt(pgMar.getAttribute('w:right')) || 1701;
+          const textWidth = pageWidth - marginLeft - marginRight;
+
+          const docGrid = doc.getElementsByTagNameNS(ns, 'docGrid')[0];
+          if (docGrid) {
+            const charSpace = docGrid.getAttribute('w:charSpace');
+            if (charSpace && parseInt(charSpace) > 0) {
+              const defaultCharWidth = fontSizeHalfPt * 10;
+              const totalCharWidth = defaultCharWidth + parseInt(charSpace);
+              details.charsPerLine = Math.floor(textWidth / totalCharWidth);
+            }
+          }
+          if (!details.charsPerLine) {
+            const fontSizePt = fontSizeHalfPt / 2;
+            const charWidthTwip = fontSizePt * 20;
+            details.charsPerLine = Math.floor(textWidth / charWidthTwip);
+          }
+        }
+
+        // ---- フォント名を収集 ----
+        // rFonts要素からフォント名を取得
+        const rFontsEls = doc.getElementsByTagNameNS(ns, 'rFonts');
+        const fontSet = new Set();
+        for (const el of rFontsEls) {
+          ['w:ascii', 'w:hAnsi', 'w:eastAsia', 'w:cs'].forEach(attr => {
+            const v = el.getAttribute(attr);
+            if (v) fontSet.add(v);
+          });
+        }
+
+        // styles.xmlからもデフォルトフォントを取得
+        if (stylesFile) {
+          const stylesXml = await stylesFile.async('string');
+          const styleDoc = parser.parseFromString(stylesXml, 'text/xml');
+          const allRFonts = styleDoc.getElementsByTagNameNS(ns, 'rFonts');
+          for (const el of allRFonts) {
+            ['w:ascii', 'w:hAnsi', 'w:eastAsia', 'w:cs'].forEach(attr => {
+              const v = el.getAttribute(attr);
+              if (v) fontSet.add(v);
+            });
+          }
+        }
+
+        details.fontNames = Array.from(fontSet);
+
+        // プロポーショナルフォント判定（MSP, HGP, HGS などのプロポーショナル系）
+        const proportionalPatterns = [
+          /^MSP/i, /^MS P/i, /^HGP/i, /^HGS/i,
+          /^ＭＳ Ｐ/i, /^ＭＳＰ/i,
+          /Proportional/i
+        ];
+        details.hasProportionalFont = details.fontNames.some(name =>
+          proportionalPatterns.some(p => p.test(name))
+        );
+
+        // ---- ヘッダーテキストを取得 ----
+        const headerFile = zip.file('word/header1.xml') ||
+                           zip.file('word/header2.xml') ||
+                           zip.file('word/header3.xml');
+        if (headerFile) {
+          const headerXml = await headerFile.async('string');
+          const headerDoc = parser.parseFromString(headerXml, 'text/xml');
+
+          // テキスト抽出
+          const tEls = headerDoc.getElementsByTagNameNS(ns, 't');
+          let headerText = '';
+          for (const t of tEls) headerText += t.textContent;
+          details.headerText = headerText.trim();
+
+          // 配置確認（jc要素）
+          const jcEl = headerDoc.getElementsByTagNameNS(ns, 'jc')[0];
+          details.headerAlign = jcEl ? (jcEl.getAttribute('w:val') || 'left') : 'left';
+        }
+
+        // ---- 本文テキスト ----
+        const bodyResult = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+        details.bodyText = bodyResult.value;
+
+      } catch (e) {
+        console.warn('extractWordDetails error:', e);
+      }
+
+      return details;
+    }
+
+    // ===== 書式・注意事項チェック =====
+    function runFormatChecks(details, wordText) {
+      const results = [];
+
+      // ---- 書式設定 a: 1行の文字数が30字 ----
+      {
+        const cpl = details.charsPerLine;
+        if (cpl === null) {
+          results.push({
+            id: 'format-a',
+            category: '書式設定 a',
+            title: '1行の文字数（30字設定）',
+            status: 'unknown',
+            detail: '文字数設定を取得できませんでした。'
+          });
+        } else if (cpl === 30) {
+          results.push({
+            id: 'format-a',
+            category: '書式設定 a',
+            title: '1行の文字数（30字設定）',
+            status: 'pass',
+            detail: `1行の文字数は ${cpl} 字に設定されています。`
+          });
+        } else {
+          results.push({
+            id: 'format-a',
+            category: '書式設定 a',
+            title: '1行の文字数（30字設定）',
+            status: 'fail',
+            detail: `1行の文字数が ${cpl} 字に設定されています。30字に変更してください。`
+          });
+        }
+      }
+
+      // ---- 書式設定 b: フォントが明朝体 ----
+      {
+        const fonts = details.fontNames;
+        const minchoPatterns = [
+          /明朝/,
+          /Mincho/i,
+          /^MS[\s　]*Mincho/i,
+          /^ＭＳ[\s　]*明朝/,
+          /游明朝/,
+          /Yu Mincho/i,
+          /HGS?明朝/,
+          /HGP?明朝/
+        ];
+        const gothicPatterns = [
+          /ゴシック/,
+          /Gothic/i,
+          /Meiryo/i,
+          /メイリオ/,
+          /游ゴシック/,
+          /Yu Gothic/i,
+          /Arial/i,
+          /Helvetica/i,
+          /sans-serif/i
+        ];
+
+        if (fonts.length === 0) {
+          results.push({
+            id: 'format-b',
+            category: '書式設定 b',
+            title: 'フォント種類（明朝体）',
+            status: 'unknown',
+            detail: 'フォント情報を取得できませんでした。'
+          });
+        } else {
+          const hasMincho = fonts.some(f => minchoPatterns.some(p => p.test(f)));
+          const hasGothic = fonts.some(f => gothicPatterns.some(p => p.test(f)));
+          const nonMinchoFonts = fonts.filter(f =>
+            !minchoPatterns.some(p => p.test(f)) && gothicPatterns.some(p => p.test(f))
+          );
+
+          if (hasMincho && !hasGothic) {
+            results.push({
+              id: 'format-b',
+              category: '書式設定 b',
+              title: 'フォント種類（明朝体）',
+              status: 'pass',
+              detail: `明朝体フォントが使用されています：${fonts.filter(f => minchoPatterns.some(p => p.test(f))).join('、')}`
+            });
+          } else if (!hasMincho) {
+            results.push({
+              id: 'format-b',
+              category: '書式設定 b',
+              title: 'フォント種類（明朝体）',
+              status: 'fail',
+              detail: `明朝体フォントが見つかりません。検出されたフォント：${fonts.join('、') || 'なし'}`
+            });
+          } else {
+            results.push({
+              id: 'format-b',
+              category: '書式設定 b',
+              title: 'フォント種類（明朝体）',
+              status: 'warn',
+              detail: `明朝体以外のフォントも使用されています：${nonMinchoFonts.join('、')}`
+            });
+          }
+        }
+      }
+
+      // ---- 書式設定 c: プロポーショナルフォント不使用 ----
+      {
+        const proportionalFonts = details.fontNames.filter(name => {
+          const proportionalPatterns = [
+            /^MSP/i, /^MS P/i, /^HGP/i, /^HGS/i,
+            /^ＭＳ Ｐ/i, /^ＭＳＰ/i,
+            /Proportional/i
+          ];
+          return proportionalPatterns.some(p => p.test(name));
+        });
+
+        if (proportionalFonts.length === 0) {
+          results.push({
+            id: 'format-c',
+            category: '書式設定 c',
+            title: 'プロポーショナルフォント不使用',
+            status: 'pass',
+            detail: 'プロポーショナルフォント（MSP明朝、MSPゴシック等）は使用されていません。'
+          });
+        } else {
+          results.push({
+            id: 'format-c',
+            category: '書式設定 c',
+            title: 'プロポーショナルフォント不使用',
+            status: 'fail',
+            detail: `プロポーショナルフォントが使用されています：${proportionalFonts.join('、')}。MS明朝などの等幅フォントに変更してください。`
+          });
+        }
+      }
+
+      // ---- 注意事項 1: ヘッダーに受験情報が左寄せで入力されているか ----
+      {
+        const headerText = details.headerText;
+        const headerAlign = details.headerAlign;
+
+        if (!headerText) {
+          results.push({
+            id: 'notice-1',
+            category: '注意事項 1',
+            title: 'ヘッダー（受験情報の左寄せ入力）',
+            status: 'fail',
+            detail: 'ヘッダーにテキストが入力されていません。受験級・試験場校名・受験番号を左寄せで入力してください。'
+          });
+        } else {
+          const isLeft = !headerAlign || headerAlign === 'left' || headerAlign === 'start';
+          if (isLeft) {
+            results.push({
+              id: 'notice-1',
+              category: '注意事項 1',
+              title: 'ヘッダー（受験情報の左寄せ入力）',
+              status: 'pass',
+              detail: `ヘッダーに左寄せでテキストが入力されています：「${headerText}」`
+            });
+          } else {
+            results.push({
+              id: 'notice-1',
+              category: '注意事項 1',
+              title: 'ヘッダー（受験情報の左寄せ入力）',
+              status: 'fail',
+              detail: `ヘッダーのテキストが左寄せになっていません（現在：${headerAlign}）。左寄せに変更してください。入力内容：「${headerText}」`
+            });
+          }
+        }
+      }
+
+      // ---- 注意事項 2: すべて全角文字で入力されているか ----
+      {
+        // 半角英数字・半角記号（ASCII 0x21-0x7E）を検出
+        // ただし改行・スペースは除外
+        const bodyText = details.bodyText || wordText;
+        // 半角英数字・記号（スペース除く）
+        const hankakuRegex = /[!-~]/g;
+        const matches = [...bodyText.matchAll(hankakuRegex)];
+
+        // 許容する半角文字（数字のみの場合は文脈判断が難しいため警告扱い）
+        if (matches.length === 0) {
+          results.push({
+            id: 'notice-2',
+            category: '注意事項 2',
+            title: '全角文字入力',
+            status: 'pass',
+            detail: '半角文字（英数字・記号）は検出されませんでした。'
+          });
+        } else {
+          const uniqueChars = [...new Set(matches.map(m => m[0]))].join('');
+          results.push({
+            id: 'notice-2',
+            category: '注意事項 2',
+            title: '全角文字入力',
+            status: 'fail',
+            detail: `半角文字が ${matches.length} 箇所検出されました。検出文字：「${uniqueChars}」\nすべて全角文字に変換してください。`
+          });
+        }
+      }
+
+      // ---- 注意事項 3: 長音記号の使用 ----
+      {
+        const bodyText = details.bodyText || wordText;
+        // 長音を表す可能性のある文字（ハイフン、マイナス、全角ハイフン等）を検出
+        // 正しい長音記号：ー（U+30FC）
+        // 誤りやすい文字：－（U+FF0D 全角ハイフンマイナス）、‐（U+2010 ハイフン）、
+        //                  ─（U+2500 罫線）、—（U+2014 ダッシュ）、- (U+002D 半角ハイフン)
+        const wrongLongVowelChars = [
+          { char: '\uFF0D', name: '全角ハイフンマイナス（－）' },
+          { char: '\u2010', name: 'ハイフン（‐）' },
+          { char: '\u2014', name: 'ダッシュ（—）' },
+          { char: '\u2500', name: '罫線（─）' },
+          { char: '\u002D', name: '半角ハイフン（-）' },
+          { char: '\u30FB', name: '中点（・）を長音代わりに使用' }
+        ];
+
+        const found = [];
+        for (const { char, name } of wrongLongVowelChars) {
+          const count = (bodyText.split(char)).length - 1;
+          if (count > 0) found.push(`${name} × ${count}箇所`);
+        }
+
+        if (found.length === 0) {
+          results.push({
+            id: 'notice-3',
+            category: '注意事項 3',
+            title: '長音記号（ー）の使用',
+            status: 'pass',
+            detail: '長音記号（ー）以外の代替文字は検出されませんでした。'
+          });
+        } else {
+          results.push({
+            id: 'notice-3',
+            category: '注意事項 3',
+            title: '長音記号（ー）の使用',
+            status: 'fail',
+            detail: `長音記号の代わりに別の文字が使用されている可能性があります：\n${found.join('\n')}\n長音はすべて「ー」（カタカナの長音記号）で入力してください。`
+          });
+        }
+      }
+
+      // ---- 注意事項 5: 句読点とピリオド・コンマの混用チェック ----
+      {
+        const bodyText = details.bodyText || wordText;
+
+        const hasTen = bodyText.includes('、');   // 読点
+        const hasMaru = bodyText.includes('。');  // 句点
+        const hasComma = bodyText.includes('，') || bodyText.includes(','); // コンマ（全角・半角）
+        const hasPeriod = bodyText.includes('．') || bodyText.includes('.'); // ピリオド（全角・半角）
+
+        // 混用パターン：句点と読点の両方 + ピリオドかコンマのどちらか
+        const mixedKutenPeriod = hasMaru && hasPeriod;
+        const mixedTotenComma = hasTen && hasComma;
+
+        if (!mixedKutenPeriod && !mixedTotenComma) {
+          // 使用している句読点の種類を表示
+          let usedPunct = [];
+          if (hasMaru) usedPunct.push('句点（。）');
+          if (hasTen) usedPunct.push('読点（、）');
+          if (hasPeriod) usedPunct.push('ピリオド（．）');
+          if (hasComma) usedPunct.push('コンマ（，）');
+          results.push({
+            id: 'notice-5',
+            category: '注意事項 5',
+            title: '句読点・ピリオド・コンマの混用',
+            status: 'pass',
+            detail: `句読点の混用はありません。使用中：${usedPunct.join('、') || 'なし'}`
+          });
+        } else {
+          const issues = [];
+          if (mixedKutenPeriod) issues.push('句点（。）とピリオド（．）が混用されています');
+          if (mixedTotenComma) issues.push('読点（、）とコンマ（，）が混用されています');
+          results.push({
+            id: 'notice-5',
+            category: '注意事項 5',
+            title: '句読点・ピリオド・コンマの混用',
+            status: 'fail',
+            detail: issues.join('\n') + '\n句点↔ピリオド、読点↔コンマは代替可能ですが、混用はエラーです。'
+          });
+        }
+      }
+
+      return results;
+    }
+
+    // チェック結果をHTMLとして描画
+    function renderFormatChecks(results) {
+      const listEl = document.getElementById('check-list');
+      const summaryEl = document.getElementById('check-summary');
+      listEl.innerHTML = '';
+      summaryEl.innerHTML = '';
+
+      const counts = { pass: 0, fail: 0, warn: 0, unknown: 0 };
+      for (const r of results) counts[r.status]++;
+
+      // サマリーバッジ
+      const summaryItems = [
+        { status: 'pass', label: `合格 ${counts.pass}` },
+        { status: 'fail', label: `エラー ${counts.fail}` },
+        { status: 'warn', label: `警告 ${counts.warn}` },
+        { status: 'unknown', label: `不明 ${counts.unknown}` }
+      ];
+      for (const { status, label } of summaryItems) {
+        if (counts[status] > 0) {
+          summaryEl.innerHTML += `
+            <div class="summary-badge">
+              <div class="summary-dot ${status}"></div>
+              <span>${label}</span>
+            </div>`;
+        }
+      }
+
+      // 各チェック項目
+      for (const r of results) {
+        const icon = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : r.status === 'warn' ? '!' : '?';
+        const detailClass = r.status === 'fail' ? 'fail-detail' : r.status === 'warn' ? 'warn-detail' : '';
+        const detailHtml = escapeHtml(r.detail).replace(/\n/g, '<br>');
+
+        listEl.innerHTML += `
+          <div class="check-item ${r.status}">
+            <div class="check-badge ${r.status}">${icon}</div>
+            <div class="check-body">
+              <div class="check-title">${escapeHtml(r.category)}　${escapeHtml(r.title)}</div>
+              <div class="check-detail ${detailClass}">${detailHtml}</div>
+            </div>
+          </div>`;
+      }
+    }
+
     // Detect Word chars-per-line from docx XML settings
     async function detectWordCharsPerLine(file) {
       try {
         const arrayBuffer = await file.arrayBuffer();
         const zip = await JSZip.loadAsync(arrayBuffer);
-
         const parser = new DOMParser();
         const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 
-        // Read document.xml
         const docXml = await zip.file('word/document.xml').async('string');
         const doc = parser.parseFromString(docXml, 'text/xml');
 
-        // Get page dimensions
         const pgSz = doc.getElementsByTagNameNS(ns, 'pgSz')[0];
         const pgMar = doc.getElementsByTagNameNS(ns, 'pgMar')[0];
         if (!pgSz || !pgMar) return null;
@@ -612,127 +1191,88 @@
         const marginRight = parseInt(pgMar.getAttribute('w:right')) || 1701;
         const textWidth = pageWidth - marginLeft - marginRight;
 
-        // Get default font size from docDefaults in styles.xml
-        let fontSizeHalfPt = 21; // default 10.5pt
+        let fontSizeHalfPt = 21;
         const stylesFile = zip.file('word/styles.xml');
         if (stylesFile) {
           const stylesXml = await stylesFile.async('string');
           const styleDoc = parser.parseFromString(stylesXml, 'text/xml');
-          // Look for sz inside docDefaults > rPrDefault > rPr
           const docDefaults = styleDoc.getElementsByTagNameNS(ns, 'docDefaults')[0];
           if (docDefaults) {
             const sz = docDefaults.getElementsByTagNameNS(ns, 'sz')[0];
-            if (sz) {
-              fontSizeHalfPt = parseInt(sz.getAttribute('w:val')) || 21;
-            }
+            if (sz) fontSizeHalfPt = parseInt(sz.getAttribute('w:val')) || 21;
           }
         }
 
-        // Check docGrid for charSpace (explicit chars-per-line setting)
         const docGrid = doc.getElementsByTagNameNS(ns, 'docGrid')[0];
         if (docGrid) {
           const charSpace = docGrid.getAttribute('w:charSpace');
-          const gridType = docGrid.getAttribute('w:type');
-
           if (charSpace && parseInt(charSpace) > 0) {
-            // charSpace is extra spacing per char in twips
-            // Chars per line = textWidth / (defaultCharWidth + charSpace)
-            const defaultCharWidth = fontSizeHalfPt * 10; // half-pt → twip
+            const defaultCharWidth = fontSizeHalfPt * 10;
             const totalCharWidth = defaultCharWidth + parseInt(charSpace);
             return Math.floor(textWidth / totalCharWidth);
           }
         }
 
-        // No explicit charSpace: calculate from page width and font size
-        // Full-width char width in twips = fontSize(pt) × 20
-        // fontSize(pt) = fontSizeHalfPt / 2
         const fontSizePt = fontSizeHalfPt / 2;
         const charWidthTwip = fontSizePt * 20;
-        const charsPerLine = Math.floor(textWidth / charWidthTwip);
-
-        return charsPerLine;
+        return Math.floor(textWidth / charWidthTwip);
       } catch (e) {
         console.warn('Could not detect Word chars per line:', e);
         return null;
       }
     }
 
-    // Detect PDF chars-per-line (most common line length, excluding short lines)
+    // Detect PDF chars-per-line
     function detectPdfCharsPerLine(pdfLines) {
-      const lengths = pdfLines
-        .map(l => l.trim().length)
-        .filter(len => len > 10); // exclude very short lines
+      const lengths = pdfLines.map(l => l.trim().length).filter(len => len > 10);
       if (lengths.length === 0) return null;
-
-      // Find most common length (mode)
       const freq = {};
       let maxCount = 0;
       let mode = lengths[0];
       for (const len of lengths) {
         freq[len] = (freq[len] || 0) + 1;
-        if (freq[len] > maxCount) {
-          maxCount = freq[len];
-          mode = len;
-        }
+        if (freq[len] > maxCount) { maxCount = freq[len]; mode = len; }
       }
       return mode;
     }
 
-    // Strip exam header (title, date, grade, division, time limit etc.)
+    // Strip exam header
     function stripHeader(text) {
       const lines = text.split('\n');
       let startIndex = 0;
-
       const headerKeywords = [
         '公益財団法人', '全国商業高等学校', '主催', '文部科学省', '後援',
         '検定試験', '検定', 'ビジネス文書', '実務検定',
         '速度部門', '実技部門', '筆記部門', '部門問題', '部門',
         '制限時間', '第', '級',
       ];
-
-      // Scan up to first 20 lines for header content
       for (let i = 0; i < Math.min(lines.length, 20); i++) {
         const line = lines[i].trim();
-
-        // Skip empty lines within header area
         if (line === '') continue;
-
-        // Check if line contains header keywords
         const matchCount = headerKeywords.filter(kw => line.includes(kw)).length;
-
-        // Also detect date patterns like （7. 11. 23） or (7.11.23)
         const isDateLine = /[（(]\s*\d+\s*[．.]\s*\d+\s*[．.]\s*\d+\s*[)）]/.test(line);
-
-        // Detect standalone "制限時間10分" without parentheses
         const isTimeLimit = /制限時間\s*\d+\s*分/.test(line);
-
         if (matchCount >= 1 || isDateLine || isTimeLimit) {
           startIndex = i + 1;
         } else {
-          // Hit a non-header line — stop scanning
           break;
         }
       }
-
       return lines.slice(startIndex).join('\n').trim();
     }
 
-    // Remove trailing cumulative character counts from PDF lines (e.g. "30", "60", "90"...)
+    // Remove trailing cumulative counts
     function stripCumulativeCounts(text) {
-      return text.split('\n').map(line => {
-        // Remove trailing number that looks like a cumulative count (multiples or near-multiples)
-        return line.replace(/\d{1,4}\s*$/, '').trimEnd();
-      }).join('\n');
+      return text.split('\n').map(line => line.replace(/\d{1,4}\s*$/, '').trimEnd()).join('\n');
     }
 
-    // Normalize text for comparison (preserve leading indent)
+    // Normalize text
     function normalizeText(text) {
       return text
         .replace(/\r\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
         .split('\n')
         .map(line => {
-          // Preserve leading full-width space (　) or half-width space for indent
           const indentMatch = line.match(/^([　 ]*)/);
           const indent = indentMatch ? indentMatch[1] : '';
           const rest = line.slice(indent.length).replace(/[ \t]+/g, ' ').trim();
@@ -744,8 +1284,7 @@
 
     // Calculate match rate
     function calcMatchRate(diffs) {
-      let matchChars = 0;
-      let totalChars = 0;
+      let matchChars = 0, totalChars = 0;
       for (const part of diffs) {
         if (!part.added && !part.removed) {
           matchChars += part.value.length;
@@ -759,13 +1298,12 @@
       return totalChars === 0 ? 100 : Math.round((matchChars / totalChars) * 100);
     }
 
-    // Render full-text diff view
+    // Render diff view
     function renderDiff(diffs) {
       const leftEl = document.getElementById('diff-left');
       const rightEl = document.getElementById('diff-right');
       leftEl.innerHTML = '';
       rightEl.innerHTML = '';
-
       for (const part of diffs) {
         const escaped = escapeHtml(part.value);
         if (!part.added && !part.removed) {
@@ -791,7 +1329,7 @@
       document.getElementById(id).style.display = 'flex';
     }
 
-    // Compare
+    // Compare & Check
     async function compare() {
       const errorEl = document.getElementById('error-msg');
       errorEl.textContent = '';
@@ -808,21 +1346,20 @@
       showScreen('loading-screen');
 
       try {
-        const [pdfText, wordText, wordCpl] = await Promise.all([
+        const [pdfText, wordText, wordCpl, wordDetails] = await Promise.all([
           extractPdfText(pdfFile),
           extractWordText(wordFile),
-          detectWordCharsPerLine(wordFile)
+          detectWordCharsPerLine(wordFile),
+          extractWordDetails(wordFile)
         ]);
 
         const strippedPdf = stripHeader(pdfText);
         const strippedWord = stripHeader(wordText);
 
-        // Remove cumulative counts from PDF lines, then normalize
         const cleanPdf = stripCumulativeCounts(strippedPdf);
         const normPdf = normalizeText(cleanPdf);
         const normWord = normalizeText(strippedWord);
 
-        // Full-text diff (for overall comparison and diff view)
         const fullPdfText = normPdf.split('\n').filter(l => l.trim() !== '').join('');
         const fullWordText = normWord.split('\n').filter(l => l.trim() !== '').join('');
         const diffs = Diff.diffChars(fullPdfText, fullWordText);
@@ -832,13 +1369,14 @@
         rateEl.textContent = rate + '%';
         rateEl.className = 'match-rate-value ' + (rate >= 80 ? 'rate-high' : rate >= 50 ? 'rate-mid' : 'rate-low');
 
-        // PDF lines (after removing counts)
-        const pdfLines = normPdf.split('\n').filter(l => l.trim() !== '');
+        // 書式・注意事項チェック
+        const checkResults = runFormatChecks(wordDetails, wordText);
+        renderFormatChecks(checkResults);
 
-        // Detect chars-per-line
+        // 行・文字数比較
+        const pdfLines = normPdf.split('\n').filter(l => l.trim() !== '');
         const pdfCpl = detectPdfCharsPerLine(pdfLines);
 
-        // Display chars-per-line comparison
         const pdfCplEl = document.getElementById('pdf-cpl');
         const wordCplEl = document.getElementById('word-cpl');
         const cplWarning = document.getElementById('cpl-warning');
@@ -847,7 +1385,7 @@
         wordCplEl.textContent = wordCpl ? wordCpl + '字' : '不明';
 
         if (pdfCpl && wordCpl && pdfCpl !== wordCpl) {
-          pdfCplEl.className = 'cpl-value cpl-match';
+          pdfCplEl.className = 'cpl-value cpl-mismatch';
           wordCplEl.className = 'cpl-value cpl-mismatch';
           cplWarning.innerHTML = '<div class="chars-per-line-warning">' +
             '<strong>1行の文字数が一致していません。</strong><br>' +
@@ -865,16 +1403,14 @@
         }
 
         const wordLines = normWord.split('\n').filter(l => l.trim() !== '');
-
         document.getElementById('pdf-lines').textContent = pdfLines.length;
         document.getElementById('pdf-chars').textContent = fullPdfText.length;
         document.getElementById('word-lines').textContent = wordLines.length;
         document.getElementById('word-chars').textContent = fullWordText.length;
 
-        // Full-text diff view
         renderDiff(diffs);
-
         showScreen('result-screen');
+
       } catch (e) {
         console.error(e);
         showScreen('upload-screen');
@@ -887,7 +1423,6 @@
       pdfFile = null;
       wordFile = null;
 
-      // Reset drop zones
       const pdfDrop = document.getElementById('pdf-drop');
       pdfDrop.classList.remove('has-file');
       pdfDrop.innerHTML = '<p>クリックまたはドラッグ＆ドロップでPDFファイルを選択</p><input type="file" id="pdf-input" accept=".pdf">';
@@ -896,7 +1431,6 @@
       wordDrop.classList.remove('has-file');
       wordDrop.innerHTML = '<p>クリックまたはドラッグ＆ドロップでWordファイルを選択</p><input type="file" id="word-input" accept=".docx">';
 
-      // Re-bind events
       setupDropZone('pdf-drop', 'pdf-input', '.pdf', (file, drop) => {
         pdfFile = file;
         setFileDisplay(drop, file.name);
