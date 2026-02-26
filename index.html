@@ -537,9 +537,6 @@
         fontType: null,              // フォント種類（文字列）
         noProportionalFont: null,    // プロポーショナルフォント不使用（boolean）
         // 注意事項
-        headerRequired: null,        // ヘッダー入力必須（boolean）
-        headerAlign: null,           // ヘッダー配置（'left' など）
-        headerItems: [],             // ヘッダーに入力すべき項目（配列）
         fullWidthRequired: null,     // 全角文字必須（boolean）
         longVowelRequired: null,     // 長音記号使用必須（boolean）
         punctuationMixForbidden: null, // 句読点混用禁止（boolean）
@@ -609,20 +606,6 @@
         rules.noProportionalFont = true;
       }
 
-      // ---- 注意事項 1: ヘッダー ----
-      // 例: "ヘッダーに左寄せで受験級、試験場校名、受験番号を入力すること。"
-      const headerMatch = rules.noticeSection.match(
-        /ヘッダー[にに]([^\s　で]+)[でで]([^をを。]+)[をを]入力/
-      );
-      if (headerMatch) {
-        rules.headerRequired = true;
-        rules.headerAlign = headerMatch[1]; // "左寄せ" など
-        // 入力すべき項目をカンマ・読点で分割
-        rules.headerItems = headerMatch[2]
-          .split(/[、,，・]/)
-          .map(s => s.trim())
-          .filter(s => s.length > 0);
-      }
 
       // ---- 注意事項 2: 全角文字 ----
       if (/すべて全角文字[でで]入力/.test(rules.noticeSection)) {
@@ -664,8 +647,6 @@
         { label: '書式設定 a｜1行の文字数', value: rules.charsPerLine !== null ? `${rules.charsPerLine}字` : null },
         { label: '書式設定 b｜フォント種類', value: rules.fontType || null },
         { label: '書式設定 c｜プロポーショナルフォント', value: rules.noProportionalFont ? '使用禁止' : null },
-        { label: '注意事項 1｜ヘッダー配置', value: rules.headerAlign ? `${rules.headerAlign}で入力` : null },
-        { label: '注意事項 1｜ヘッダー入力項目', value: rules.headerItems.length > 0 ? rules.headerItems.join('・') : null },
         { label: '注意事項 2｜文字種', value: rules.fullWidthRequired ? '全角文字のみ' : null },
         { label: '注意事項 3｜長音', value: rules.longVowelRequired ? '長音記号（ー）を使用' : null },
         { label: '注意事項 5｜句読点混用', value: rules.punctuationMixForbidden ? '混用禁止（エラー）' : null },
@@ -691,8 +672,6 @@
         charsPerLine: null,
         fontNames: [],
         hasProportionalFont: false,
-        headerText: '',
-        headerAlign: null,
         bodyText: ''
       };
 
@@ -789,19 +768,14 @@
         details.hasProportionalFont = details.fontNames.some(n => propPatterns.some(p => p.test(n)));
         details.proportionalFontNames = details.fontNames.filter(n => propPatterns.some(p => p.test(n)));
 
-        // ヘッダーテキスト・配置取得
+        // ヘッダーファイルは使用しない
         const headerFile = zip.file('word/header1.xml') ||
                            zip.file('word/header2.xml') ||
                            zip.file('word/header3.xml');
         if (headerFile) {
           const headerXml = await headerFile.async('string');
           const headerDoc = parser.parseFromString(headerXml, 'text/xml');
-          const tEls = headerDoc.getElementsByTagNameNS(ns, 't');
-          let headerText = '';
-          for (const t of tEls) headerText += t.textContent;
-          details.headerText = headerText.trim();
-          const jcEl = headerDoc.getElementsByTagNameNS(ns, 'jc')[0];
-          details.headerAlign = jcEl ? (jcEl.getAttribute('w:val') || 'left') : 'left';
+          // ヘッダー情報は使用しない
         }
 
         // 本文テキスト
@@ -887,26 +861,6 @@
         } else {
           results.push({ category: '書式設定 c', title: 'プロポーショナルフォント不使用',
             status: 'pass', detail: 'プロポーショナルフォント（MSP明朝、MSPゴシック等）は使用されていません。' });
-        }
-      }
-
-      // ---- 注意事項 1: ヘッダー ----
-      if (rules.headerRequired === true) {
-        const headerText = wordDetails.headerText;
-        const headerAlign = wordDetails.headerAlign;
-        const expectedAlign = rules.headerAlign || '左寄せ';
-        const isLeft = !headerAlign || headerAlign === 'left' || headerAlign === 'start';
-        const expectedIsLeft = /左/.test(expectedAlign);
-
-        if (!headerText) {
-          results.push({ category: '注意事項 1', title: `ヘッダー（${expectedAlign}で入力）`,
-            status: 'fail', detail: `ヘッダーにテキストが入力されていません。${rules.headerItems.join('・')}を${expectedAlign}で入力してください。` });
-        } else if (expectedIsLeft && !isLeft) {
-          results.push({ category: '注意事項 1', title: `ヘッダー（${expectedAlign}で入力）`,
-            status: 'fail', detail: `ヘッダーが左寄せになっていません（現在：${headerAlign}）。入力内容：「${headerText}」` });
-        } else {
-          results.push({ category: '注意事項 1', title: `ヘッダー（${expectedAlign}で入力）`,
-            status: 'pass', detail: `ヘッダーに${expectedAlign}でテキストが入力されています：「${headerText}」` });
         }
       }
 
