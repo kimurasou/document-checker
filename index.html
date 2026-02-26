@@ -595,28 +595,16 @@
         const arrayBuffer = await file.arrayBuffer();
         const zip = await JSZip.loadAsync(arrayBuffer);
 
-        // Read document.xml
-        const docXml = await zip.file('word/document.xml').async('string');
         const parser = new DOMParser();
-        const doc = parser.parseFromString(docXml, 'text/xml');
         const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 
-        // Check docGrid for explicit charSpace
-        const docGrid = doc.getElementsByTagNameNS(ns, 'docGrid')[0];
-        if (docGrid) {
-          const charSpace = docGrid.getAttribute('w:charSpace');
-          const gridType = docGrid.getAttribute('w:type');
-
-          // If charSpace is set explicitly
-          if (charSpace && gridType && gridType.includes('Char')) {
-            // charSpace is in twips adjustment; need page width info
-          }
-        }
+        // Read document.xml
+        const docXml = await zip.file('word/document.xml').async('string');
+        const doc = parser.parseFromString(docXml, 'text/xml');
 
         // Get page dimensions
         const pgSz = doc.getElementsByTagNameNS(ns, 'pgSz')[0];
         const pgMar = doc.getElementsByTagNameNS(ns, 'pgMar')[0];
-
         if (!pgSz || !pgMar) return null;
 
         const pageWidth = parseInt(pgSz.getAttribute('w:w')) || 11906;
@@ -624,22 +612,43 @@
         const marginRight = parseInt(pgMar.getAttribute('w:right')) || 1701;
         const textWidth = pageWidth - marginLeft - marginRight;
 
-        // Get default font size from styles.xml
+        // Get default font size from docDefaults in styles.xml
         let fontSizeHalfPt = 21; // default 10.5pt
         const stylesFile = zip.file('word/styles.xml');
         if (stylesFile) {
           const stylesXml = await stylesFile.async('string');
           const styleDoc = parser.parseFromString(stylesXml, 'text/xml');
-          const szElements = styleDoc.getElementsByTagNameNS(ns, 'sz');
-          if (szElements.length > 0) {
-            fontSizeHalfPt = parseInt(szElements[0].getAttribute('w:val')) || 21;
+          // Look for sz inside docDefaults > rPrDefault > rPr
+          const docDefaults = styleDoc.getElementsByTagNameNS(ns, 'docDefaults')[0];
+          if (docDefaults) {
+            const sz = docDefaults.getElementsByTagNameNS(ns, 'sz')[0];
+            if (sz) {
+              fontSizeHalfPt = parseInt(sz.getAttribute('w:val')) || 21;
+            }
           }
         }
 
-        // Calculate: 1pt = 20twip, font size in half-points
-        // Full-width char width ≈ font size in twips
-        const fontTwips = fontSizeHalfPt * 10; // half-pt to twip: val/2 * 20
-        const charsPerLine = Math.floor(textWidth / fontTwips);
+        // Check docGrid for charSpace (explicit chars-per-line setting)
+        const docGrid = doc.getElementsByTagNameNS(ns, 'docGrid')[0];
+        if (docGrid) {
+          const charSpace = docGrid.getAttribute('w:charSpace');
+          const gridType = docGrid.getAttribute('w:type');
+
+          if (charSpace && parseInt(charSpace) > 0) {
+            // charSpace is extra spacing per char in twips
+            // Chars per line = textWidth / (defaultCharWidth + charSpace)
+            const defaultCharWidth = fontSizeHalfPt * 10; // half-pt → twip
+            const totalCharWidth = defaultCharWidth + parseInt(charSpace);
+            return Math.floor(textWidth / totalCharWidth);
+          }
+        }
+
+        // No explicit charSpace: calculate from page width and font size
+        // Full-width char width in twips = fontSize(pt) × 20
+        // fontSize(pt) = fontSizeHalfPt / 2
+        const fontSizePt = fontSizeHalfPt / 2;
+        const charWidthTwip = fontSizePt * 20;
+        const charsPerLine = Math.floor(textWidth / charWidthTwip);
 
         return charsPerLine;
       } catch (e) {
