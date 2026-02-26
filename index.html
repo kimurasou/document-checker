@@ -1107,6 +1107,41 @@
       return text.split('\n').map(line => line.replace(/\d{1,4}\s*$/, '').trimEnd()).join('\n');
     }
 
+    // =====================================================
+    // PDF本文を段落単位に再構成
+    // pdftotext -layout の出力形式:
+    //   段落開始行: 先頭に半角スペースが4個以上 → 全角スペース1文字（字下げ）に変換
+    //   継続行:     先頭に半角スペース1個 → 前の行に連結（折り返し）
+    // 段落間には改行を入れる
+    // =====================================================
+    function reconstructPdfParagraphs(text) {
+      const lines = text.split('\n');
+      const paragraphs = [];
+      let current = null;
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const leadingSpaces = line.length - line.trimStart().length;
+        const stripped = line.trim();
+
+        if (leadingSpaces >= 4) {
+          // 段落開始行: 先頭の半角スペース → 全角スペース1文字
+          if (current !== null) paragraphs.push(current);
+          current = '\u3000' + stripped;
+        } else {
+          // 継続行: そのまま連結
+          if (current === null) {
+            current = stripped;
+          } else {
+            current += stripped;
+          }
+        }
+      }
+      if (current !== null) paragraphs.push(current);
+
+      return paragraphs.join('\n');
+    }
+
     function normalizeText(text) {
       return text
         .replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n')
@@ -1183,10 +1218,12 @@
         const bodyPdfText = pdfPages.slice(1).join('\n');
 
         // テキスト比較
+        // PDF: ヘッダー除去 → 累積文字数除去 → 段落再構成（折り返し行を連結、字下げを全角スペースに）
         const strippedPdf = stripHeader(bodyPdfText);
-        const strippedWord = stripHeader(wordText);
         const cleanPdf = stripCumulativeCounts(strippedPdf);
-        const normPdf = normalizeText(cleanPdf);
+        const normPdf = reconstructPdfParagraphs(cleanPdf);
+        // Word: ヘッダー除去 → 正規化
+        const strippedWord = stripHeader(wordText);
         const normWord = normalizeText(strippedWord);
         // 改行・字下げスペースを保持したまま比較（空行のみ除外）
         const fullPdfText = normPdf.split('\n').filter(l => l.trim() !== '').join('\n');
