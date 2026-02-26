@@ -1060,26 +1060,112 @@
 
     function stripHeader(text) {
       const lines = text.split('\n');
-      let startIndex = 0;
-      const headerKeywords = [
-        '公益財団法人', '全国商業高等学校', '主催', '文部科学省', '後援',
-        '検定試験', '検定', 'ビジネス文書', '実務検定',
-        '速度部門', '実技部門', '筆記部門', '部門問題', '部門',
-        '制限時間', '第', '級',
+
+      // ① 前付きヘッダー行を除外（試験名・主催・日付・制限時間など）
+      const headerLinePatterns = [
+        /公益財団法人/, /全国商業高等学校/, /主催/, /文部科学省/, /後援/,
+        /ビジネス文書実務検定/, /実務検定/, /ビジネス文書/,
+        /速度部門/, /実技部門/, /筆記部門/, /部門問題/, /部門/,
+        /制限時間\s*\d+\s*分/,
+        /[（(]\s*\d+\s*[．.]\s*\d+\s*[．.]\s*\d+\s*[)）]/,  // 日付 (7.11.23)
+        /^第\s*\d+\s*回/,   // 第75回
+        /^第\s*[０-９\d]+\s*[級回]/,  // 第3級
+        /無断複製/, /複製を禁/, /〘/, /〙/, /⑨/, /\(c\)/i,  // 著作権表記
       ];
-      for (let i = 0; i < Math.min(lines.length, 20); i++) {
-        const line = lines[i].trim();
+
+      // ② 書式設定・注意事項ブロックを除外
+      const sectionStartPatterns = [
+        /[〔\[【「]\s*書\s*式\s*設\s*定\s*[〕\]】」]/,
+        /[〔\[【「]\s*注\s*意\s*事\s*項\s*[〕\]】」]/,
+        /試験委員の指示/,
+      ];
+
+      // ③ 書式設定・注意事項ブロック終端（本文開始）を検出するパターン
+      // 本文は段落インデント（全角スペース）で始まる行、または
+      // 注意事項の最後の項目の後に来る
+      const bodyStartPatterns = [
+        /^[　\s]{1,3}[^ａｂｃａｂｃ１２３４５６1-9]/, // 全角スペースインデントで始まる本文
+      ];
+
+      // ステップ1: 前付きヘッダー行をスキップ
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i].replace(/[\x00-\x1F\x7F]/g, '').trim();
+        if (line === '') { i++; continue; }
+        const isHeaderLine = headerLinePatterns.some(p => p.test(line));
+        if (isHeaderLine) { i++; continue; }
+        break;
+      }
+
+      // ステップ2: 書式設定・注意事項ブロックをスキップ
+      let inSkipBlock = false;
+      let bodyStartIndex = i;
+      let foundBody = false;
+
+      for (let j = i; j < lines.length; j++) {
+        const line = lines[j].replace(/[\x00-\x1F\x7F]/g, '').trim();
         if (line === '') continue;
-        const matchCount = headerKeywords.filter(kw => line.includes(kw)).length;
-        const isDateLine = /[（(]\s*\d+\s*[．.]\s*\d+\s*[．.]\s*\d+\s*[)）]/.test(line);
-        const isTimeLimit = /制限時間\s*\d+\s*分/.test(line);
-        if (matchCount >= 1 || isDateLine || isTimeLimit) {
-          startIndex = i + 1;
-        } else {
+
+        // セクション開始検出
+        if (sectionStartPatterns.some(p => p.test(line))) {
+          inSkipBlock = true;
+          continue;
+        }
+
+        if (inSkipBlock) {
+          // 書式設定・注意事項ブロック内の行パターン
+          // a. b. c. や 1. 2. 3. で始まる行はスキップ
+          const isFormatItem = /^[ａｂｃａｂｃabc]\s*[．.]/.test(line);
+          const isNoticeItem = /^[１２３４５６７８９1-9]\s*[．.]/.test(line);
+          const isContinuation = /^(こと|に行うこと|ない。|ない|する。)/.test(line); // 折り返し行
+          const isReceiptBox = /受\s*験\s*番\s*号/.test(line);
+
+          if (isFormatItem || isNoticeItem || isContinuation || isReceiptBox) {
+            continue; // スキップブロック内の継続行
+          }
+
+          // ヘッダー行もスキップ
+          if (headerLinePatterns.some(p => p.test(line))) {
+            continue;
+          }
+
+          // 本文らしい行が来たらブロック終了
+          inSkipBlock = false;
+          bodyStartIndex = j;
+          foundBody = true;
+          break;
+        } else if (!foundBody) {
+          // ヘッダー除外後、最初の非ヘッダー行が本文開始
+          bodyStartIndex = j;
+          foundBody = true;
           break;
         }
       }
-      return lines.slice(startIndex).join('\n').trim();
+
+      if (!foundBody) return '';
+
+      // ステップ3: 本文を結合して返す（2ページ目以降の重複ヘッダーも除去）
+      const bodyLines = [];
+      let skipNextHeader = false;
+      for (let k = bodyStartIndex; k < lines.length; k++) {
+        const raw = lines[k].replace(/[\x00-\x1F\x7F]/g, '');
+        const trimmed = raw.trim();
+
+        // 2ページ目以降の試験名ヘッダー行を除外
+        if (headerLinePatterns.some(p => p.test(trimmed))) continue;
+        // 受験番号欄を除外
+        if (/受\s*験\s*番\s*号/.test(trimmed)) continue;
+        // 書式設定・注意事項ブロックが再出現した場合も除外
+        if (sectionStartPatterns.some(p => p.test(trimmed))) { skipNextHeader = true; continue; }
+        if (skipNextHeader) {
+          if (/^[ａｂｃabc１２３４５６1-9]\s*[．.]/.test(trimmed) || trimmed === '') continue;
+          skipNextHeader = false;
+        }
+
+        bodyLines.push(raw);
+      }
+
+      return bodyLines.join('\n').trim();
     }
 
     function stripCumulativeCounts(text) {
