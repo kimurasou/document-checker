@@ -1135,7 +1135,8 @@
       const rightEl = document.getElementById('diff-right');
       leftEl.innerHTML = ''; rightEl.innerHTML = '';
       for (const part of diffs) {
-        const escaped = escapeHtml(part.value);
+        // 改行を <br> に変換して画面に正しく表示
+        const escaped = escapeHtml(part.value).replace(/\n/g, '<br>');
         if (!part.added && !part.removed) { leftEl.innerHTML += escaped; rightEl.innerHTML += escaped; }
         else if (part.removed) leftEl.innerHTML += `<span class="diff-removed">${escaped}</span>`;
         else if (part.added) rightEl.innerHTML += `<span class="diff-added">${escaped}</span>`;
@@ -1187,8 +1188,9 @@
         const cleanPdf = stripCumulativeCounts(strippedPdf);
         const normPdf = normalizeText(cleanPdf);
         const normWord = normalizeText(strippedWord);
-        const fullPdfText = normPdf.split('\n').filter(l => l.trim() !== '').join('');
-        const fullWordText = normWord.split('\n').filter(l => l.trim() !== '').join('');
+        // 改行・字下げスペースを保持したまま比較（空行のみ除外）
+        const fullPdfText = normPdf.split('\n').filter(l => l.trim() !== '').join('\n');
+        const fullWordText = normWord.split('\n').filter(l => l.trim() !== '').join('\n');
         const diffs = Diff.diffChars(fullPdfText, fullWordText);
 
         const rate = calcMatchRate(diffs);
