@@ -493,34 +493,38 @@
     setupDropZone('word-drop', 'word-input', '.docx', (file, drop) => { wordFile = file; setFileDisplay(drop, file.name); });
 
     // =====================================================
-    // PDF テキスト抽出
+    // PDF テキスト抽出（ページ単位）
     // =====================================================
-    async function extractPdfText(file) {
+    async function extractPdfPageText(pdf, pageNum) {
+      const page = await pdf.getPage(pageNum);
+      const content = await page.getTextContent();
+      const items = content.items;
+      if (items.length === 0) return '';
+      const sorted = items.slice().sort((a, b) => {
+        const ay = Math.round(a.transform[5]);
+        const by = Math.round(b.transform[5]);
+        if (Math.abs(ay - by) > 3) return by - ay;
+        return a.transform[4] - b.transform[4];
+      });
+      let lastY = null;
+      let pageText = '';
+      for (const item of sorted) {
+        const y = Math.round(item.transform[5]);
+        if (lastY !== null && Math.abs(y - lastY) > 3) pageText += '\n';
+        pageText += item.str;
+        lastY = y;
+      }
+      return pageText;
+    }
+
+    async function extractPdfAllPages(file) {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let text = '';
+      const pages = [];
       for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const items = content.items;
-        if (items.length === 0) continue;
-        const sorted = items.slice().sort((a, b) => {
-          const ay = Math.round(a.transform[5]);
-          const by = Math.round(b.transform[5]);
-          if (Math.abs(ay - by) > 3) return by - ay;
-          return a.transform[4] - b.transform[4];
-        });
-        let lastY = null;
-        let pageText = '';
-        for (const item of sorted) {
-          const y = Math.round(item.transform[5]);
-          if (lastY !== null && Math.abs(y - lastY) > 3) pageText += '\n';
-          pageText += item.str;
-          lastY = y;
-        }
-        text += pageText + '\n';
+        pages.push(await extractPdfPageText(pdf, i));
       }
-      return text.trim();
+      return pages; // pages[0] = 1ページ目, pages[1] = 2ページ目, ...
     }
 
     // =====================================================
@@ -1202,19 +1206,23 @@
       showScreen('loading-screen');
 
       try {
-        const [pdfText, wordText, wordCpl, wordDetails] = await Promise.all([
-          extractPdfText(pdfFile),
+        const [pdfPages, wordText, wordDetails] = await Promise.all([
+          extractPdfAllPages(pdfFile),
           extractWordText(wordFile),
-          detectWordCharsPerLine(wordFile),
           extractWordDetails(wordFile)
         ]);
+        const wordCpl = wordDetails.charsPerLine;
 
-        // PDFからルールを動的抽出
-        const rules = extractRulesFromPdf(pdfText);
+        // 1ページ目：書式設定・注意事項のルール抽出
+        const page1Text = pdfPages[0] || '';
+        const rules = extractRulesFromPdf(page1Text);
         renderRules(rules);
 
+        // 2ページ目以降：問題文（模範解答テキスト）
+        const bodyPdfText = pdfPages.slice(1).join('\n');
+
         // テキスト比較
-        const strippedPdf = stripHeader(pdfText);
+        const strippedPdf = stripHeader(bodyPdfText);
         const strippedWord = stripHeader(wordText);
         const cleanPdf = stripCumulativeCounts(strippedPdf);
         const normPdf = normalizeText(cleanPdf);
