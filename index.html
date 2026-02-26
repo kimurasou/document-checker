@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ビジネス文書検定 採点補助ツール</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/diff@5.1.0/dist/diff.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header {
+      width: 100%;
+      background: linear-gradient(135deg, #1e3a5f, #2563eb);
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    header p {
+      font-size: 0.85rem;
+      opacity: 0.8;
+      margin-top: 4px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+      padding: 20px;
+      flex: 1;
+    }
+
+    /* Upload Screen */
+    #upload-screen {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      align-items: center;
+    }
+
+    .upload-area {
+      width: 100%;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .upload-area h2 {
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+    }
+
+    .drop-zone {
+      border: 2px dashed #334155;
+      border-radius: 12px;
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .drop-zone:hover,
+    .drop-zone.dragover {
+      border-color: #2563eb;
+      background: rgba(37, 99, 235, 0.08);
+    }
+
+    .drop-zone.has-file {
+      border-color: #22c55e;
+      background: rgba(34, 197, 94, 0.08);
+    }
+
+    .drop-zone p {
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+
+    .drop-zone .file-name {
+      color: #22c55e;
+      font-weight: 600;
+      font-size: 1rem;
+    }
+
+    .drop-zone input[type="file"] {
+      display: none;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 14px 40px;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.1s, box-shadow 0.2s;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(37, 99, 235, 0.4);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn-secondary {
+      background: #334155;
+    }
+
+    .btn-secondary:hover {
+      box-shadow: 0 4px 16px rgba(51, 65, 85, 0.4);
+    }
+
+    /* Error */
+    .error-msg {
+      color: #f87171;
+      font-size: 0.85rem;
+      text-align: center;
+      min-height: 1.2em;
+    }
+
+    /* Loading */
+    #loading-screen {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 60px 20px;
+    }
+
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid #334155;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Result Screen */
+    #result-screen {
+      display: none;
+      flex-direction: column;
+      gap: 20px;
+      align-items: center;
+    }
+
+    .match-rate-card {
+      width: 100%;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .match-rate-card h2 {
+      font-size: 1rem;
+      margin-bottom: 12px;
+      color: #94a3b8;
+    }
+
+    .match-rate-value {
+      font-size: 3rem;
+      font-weight: 800;
+    }
+
+    .rate-high { color: #22c55e; }
+    .rate-mid { color: #eab308; }
+    .rate-low { color: #f87171; }
+
+    .buttons-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    /* Line Stats */
+    .line-stats {
+      width: 100%;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .line-stats h2 {
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 640px) {
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .stats-panel {
+      background: #0f172a;
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    .stats-panel h3 {
+      font-size: 0.9rem;
+      color: #94a3b8;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #334155;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      font-size: 0.85rem;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    .stat-label { color: #94a3b8; }
+    .stat-value { font-weight: 600; }
+    .stat-match { color: #22c55e; }
+    .stat-mismatch { color: #f87171; }
+
+    /* Diff Section */
+    .diff-section {
+      width: 100%;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .diff-section h2 {
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+    }
+
+    .diff-legend {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 16px;
+      font-size: 0.8rem;
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .legend-color {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+    }
+
+    .legend-color.removed { background: rgba(239, 68, 68, 0.3); border: 1px solid #ef4444; }
+    .legend-color.added { background: rgba(34, 197, 94, 0.3); border: 1px solid #22c55e; }
+
+    .diff-view {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 640px) {
+      .diff-view {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .diff-panel {
+      background: #0f172a;
+      border-radius: 12px;
+      padding: 16px;
+      overflow-x: auto;
+    }
+
+    .diff-panel h3 {
+      font-size: 0.9rem;
+      color: #94a3b8;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #334155;
+    }
+
+    .diff-content {
+      font-size: 0.9rem;
+      line-height: 1.8;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .diff-removed {
+      background: rgba(239, 68, 68, 0.25);
+      color: #fca5a5;
+      text-decoration: line-through;
+      border-radius: 3px;
+      padding: 1px 3px;
+    }
+
+    .diff-added {
+      background: rgba(34, 197, 94, 0.25);
+      color: #86efac;
+      border-radius: 3px;
+      padding: 1px 3px;
+    }
+
+    .chars-per-line-warning {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-top: 12px;
+      font-size: 0.85rem;
+      color: #fca5a5;
+    }
+
+    .chars-per-line-warning strong {
+      color: #f87171;
+    }
+
+    .cpl-info {
+      display: flex;
+      gap: 24px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .cpl-item {
+      background: #0f172a;
+      border-radius: 10px;
+      padding: 12px 18px;
+      flex: 1;
+      min-width: 150px;
+      text-align: center;
+    }
+
+    .cpl-label {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-bottom: 4px;
+    }
+
+    .cpl-value {
+      font-size: 1.3rem;
+      font-weight: 700;
+    }
+
+    .cpl-match { color: #22c55e; }
+    .cpl-mismatch { color: #f87171; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ビジネス文書検定 採点補助ツール</h1>
+    <p>Word解答と模範解答PDFを比較して差分を表示します</p>
+  </header>
+
+  <div class="container">
+    <!-- Upload Screen -->
+    <div id="upload-screen">
+      <div class="upload-area">
+        <h2>模範解答（PDF）</h2>
+        <div class="drop-zone" id="pdf-drop">
+          <p>クリックまたはドラッグ＆ドロップでPDFファイルを選択</p>
+          <input type="file" id="pdf-input" accept=".pdf">
+        </div>
+      </div>
+
+      <div class="upload-area">
+        <h2>利用者の解答（Word）</h2>
+        <div class="drop-zone" id="word-drop">
+          <p>クリックまたはドラッグ＆ドロップでWordファイルを選択</p>
+          <input type="file" id="word-input" accept=".docx">
+        </div>
+      </div>
+
+      <p class="error-msg" id="error-msg"></p>
+
+      <button class="btn" id="compare-btn" onclick="compare()">比較する</button>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+      <div class="spinner"></div>
+      <p>ファイルを解析中...</p>
+    </div>
+
+    <!-- Result Screen -->
+    <div id="result-screen">
+      <div class="match-rate-card">
+        <h2>一致率</h2>
+        <div class="match-rate-value" id="match-rate">--</div>
+      </div>
+
+      <div class="line-stats">
+        <h2>行・文字数の比較</h2>
+        <div class="cpl-info">
+          <div class="cpl-item">
+            <div class="cpl-label">模範解答 1行の文字数</div>
+            <div class="cpl-value" id="pdf-cpl">-</div>
+          </div>
+          <div class="cpl-item">
+            <div class="cpl-label">解答(Word) 1行の文字数</div>
+            <div class="cpl-value" id="word-cpl">-</div>
+          </div>
+        </div>
+        <div id="cpl-warning"></div>
+        <div class="stats-grid" style="margin-top:16px">
+          <div class="stats-panel">
+            <h3>模範解答（PDF）</h3>
+            <div class="stat-row">
+              <span class="stat-label">行数</span>
+              <span class="stat-value" id="pdf-lines">-</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">総文字数</span>
+              <span class="stat-value" id="pdf-chars">-</span>
+            </div>
+          </div>
+          <div class="stats-panel">
+            <h3>利用者の解答（Word）</h3>
+            <div class="stat-row">
+              <span class="stat-label">行数</span>
+              <span class="stat-value" id="word-lines">-</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">総文字数</span>
+              <span class="stat-value" id="word-chars">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="diff-section">
+        <h2>差分ビュー</h2>
+        <div class="diff-legend">
+          <div class="legend-item">
+            <div class="legend-color removed"></div>
+            <span>模範解答にあって解答にない部分</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color added"></div>
+            <span>解答にあって模範解答にない部分</span>
+          </div>
+        </div>
+        <div class="diff-view">
+          <div class="diff-panel">
+            <h3>模範解答（PDF）</h3>
+            <div class="diff-content" id="diff-left"></div>
+          </div>
+          <div class="diff-panel">
+            <h3>利用者の解答（Word）</h3>
+            <div class="diff-content" id="diff-right"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="buttons-row">
+        <button class="btn btn-secondary" onclick="goBack()">戻る</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // pdf.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    let pdfFile = null;
+    let wordFile = null;
+
+    // Drop zone setup
+    function setupDropZone(dropId, inputId, accept, onFile) {
+      const drop = document.getElementById(dropId);
+      const input = document.getElementById(inputId);
+
+      drop.addEventListener('click', () => input.click());
+
+      drop.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        drop.classList.add('dragover');
+      });
+
+      drop.addEventListener('dragleave', () => {
+        drop.classList.remove('dragover');
+      });
+
+      drop.addEventListener('drop', (e) => {
+        e.preventDefault();
+        drop.classList.remove('dragover');
+        const file = e.dataTransfer.files[0];
+        if (file) onFile(file, drop);
+      });
+
+      input.addEventListener('change', () => {
+        const file = input.files[0];
+        if (file) onFile(file, drop);
+      });
+    }
+
+    function setFileDisplay(drop, fileName) {
+      drop.classList.add('has-file');
+      drop.innerHTML = `<p class="file-name">${escapeHtml(fileName)}</p>`;
+    }
+
+    setupDropZone('pdf-drop', 'pdf-input', '.pdf', (file, drop) => {
+      pdfFile = file;
+      setFileDisplay(drop, file.name);
+    });
+
+    setupDropZone('word-drop', 'word-input', '.docx', (file, drop) => {
+      wordFile = file;
+      setFileDisplay(drop, file.name);
+    });
+
+    // Extract text from PDF (with proper line break detection)
+    async function extractPdfText(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let text = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const items = content.items;
+        if (items.length === 0) continue;
+
+        // Sort items by Y (descending = top to bottom), then X (ascending = left to right)
+        const sorted = items.slice().sort((a, b) => {
+          const ay = Math.round(a.transform[5]);
+          const by = Math.round(b.transform[5]);
+          if (Math.abs(ay - by) > 3) return by - ay; // higher Y = earlier in page
+          return a.transform[4] - b.transform[4]; // left to right
+        });
+
+        let lastY = null;
+        let pageText = '';
+        for (const item of sorted) {
+          const y = Math.round(item.transform[5]);
+          if (lastY !== null && Math.abs(y - lastY) > 3) {
+            pageText += '\n';
+          }
+          pageText += item.str;
+          lastY = y;
+        }
+        text += pageText + '\n';
+      }
+      return text.trim();
+    }
+
+    // Extract text from Word
+    async function extractWordText(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      return result.value.trim();
+    }
+
+    // Detect Word chars-per-line from docx XML settings
+    async function detectWordCharsPerLine(file) {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+
+        // Read document.xml
+        const docXml = await zip.file('word/document.xml').async('string');
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(docXml, 'text/xml');
+        const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+        // Check docGrid for explicit charSpace
+        const docGrid = doc.getElementsByTagNameNS(ns, 'docGrid')[0];
+        if (docGrid) {
+          const charSpace = docGrid.getAttribute('w:charSpace');
+          const gridType = docGrid.getAttribute('w:type');
+
+          // If charSpace is set explicitly
+          if (charSpace && gridType && gridType.includes('Char')) {
+            // charSpace is in twips adjustment; need page width info
+          }
+        }
+
+        // Get page dimensions
+        const pgSz = doc.getElementsByTagNameNS(ns, 'pgSz')[0];
+        const pgMar = doc.getElementsByTagNameNS(ns, 'pgMar')[0];
+
+        if (!pgSz || !pgMar) return null;
+
+        const pageWidth = parseInt(pgSz.getAttribute('w:w')) || 11906;
+        const marginLeft = parseInt(pgMar.getAttribute('w:left')) || 1701;
+        const marginRight = parseInt(pgMar.getAttribute('w:right')) || 1701;
+        const textWidth = pageWidth - marginLeft - marginRight;
+
+        // Get default font size from styles.xml
+        let fontSizeHalfPt = 21; // default 10.5pt
+        const stylesFile = zip.file('word/styles.xml');
+        if (stylesFile) {
+          const stylesXml = await stylesFile.async('string');
+          const styleDoc = parser.parseFromString(stylesXml, 'text/xml');
+          const szElements = styleDoc.getElementsByTagNameNS(ns, 'sz');
+          if (szElements.length > 0) {
+            fontSizeHalfPt = parseInt(szElements[0].getAttribute('w:val')) || 21;
+          }
+        }
+
+        // Calculate: 1pt = 20twip, font size in half-points
+        // Full-width char width ≈ font size in twips
+        const fontTwips = fontSizeHalfPt * 10; // half-pt to twip: val/2 * 20
+        const charsPerLine = Math.floor(textWidth / fontTwips);
+
+        return charsPerLine;
+      } catch (e) {
+        console.warn('Could not detect Word chars per line:', e);
+        return null;
+      }
+    }
+
+    // Detect PDF chars-per-line (most common line length, excluding short lines)
+    function detectPdfCharsPerLine(pdfLines) {
+      const lengths = pdfLines
+        .map(l => l.trim().length)
+        .filter(len => len > 10); // exclude very short lines
+      if (lengths.length === 0) return null;
+
+      // Find most common length (mode)
+      const freq = {};
+      let maxCount = 0;
+      let mode = lengths[0];
+      for (const len of lengths) {
+        freq[len] = (freq[len] || 0) + 1;
+        if (freq[len] > maxCount) {
+          maxCount = freq[len];
+          mode = len;
+        }
+      }
+      return mode;
+    }
+
+    // Strip exam header (title, date, grade, division, time limit etc.)
+    function stripHeader(text) {
+      const lines = text.split('\n');
+      let startIndex = 0;
+
+      const headerKeywords = [
+        '公益財団法人', '全国商業高等学校', '主催', '文部科学省', '後援',
+        '検定試験', '検定', 'ビジネス文書', '実務検定',
+        '速度部門', '実技部門', '筆記部門', '部門問題', '部門',
+        '制限時間', '第', '級',
+      ];
+
+      // Scan up to first 20 lines for header content
+      for (let i = 0; i < Math.min(lines.length, 20); i++) {
+        const line = lines[i].trim();
+
+        // Skip empty lines within header area
+        if (line === '') continue;
+
+        // Check if line contains header keywords
+        const matchCount = headerKeywords.filter(kw => line.includes(kw)).length;
+
+        // Also detect date patterns like （7. 11. 23） or (7.11.23)
+        const isDateLine = /[（(]\s*\d+\s*[．.]\s*\d+\s*[．.]\s*\d+\s*[)）]/.test(line);
+
+        // Detect standalone "制限時間10分" without parentheses
+        const isTimeLimit = /制限時間\s*\d+\s*分/.test(line);
+
+        if (matchCount >= 1 || isDateLine || isTimeLimit) {
+          startIndex = i + 1;
+        } else {
+          // Hit a non-header line — stop scanning
+          break;
+        }
+      }
+
+      return lines.slice(startIndex).join('\n').trim();
+    }
+
+    // Remove trailing cumulative character counts from PDF lines (e.g. "30", "60", "90"...)
+    function stripCumulativeCounts(text) {
+      return text.split('\n').map(line => {
+        // Remove trailing number that looks like a cumulative count (multiples or near-multiples)
+        return line.replace(/\d{1,4}\s*$/, '').trimEnd();
+      }).join('\n');
+    }
+
+    // Normalize text for comparison
+    function normalizeText(text) {
+      return text
+        .replace(/\r\n/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/ *\n */g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    // Calculate match rate
+    function calcMatchRate(diffs) {
+      let matchChars = 0;
+      let totalChars = 0;
+      for (const part of diffs) {
+        if (!part.added && !part.removed) {
+          matchChars += part.value.length;
+          totalChars += part.value.length;
+        } else if (part.removed) {
+          totalChars += part.value.length;
+        } else if (part.added) {
+          totalChars += part.value.length;
+        }
+      }
+      return totalChars === 0 ? 100 : Math.round((matchChars / totalChars) * 100);
+    }
+
+    // Render full-text diff view
+    function renderDiff(diffs) {
+      const leftEl = document.getElementById('diff-left');
+      const rightEl = document.getElementById('diff-right');
+      leftEl.innerHTML = '';
+      rightEl.innerHTML = '';
+
+      for (const part of diffs) {
+        const escaped = escapeHtml(part.value);
+        if (!part.added && !part.removed) {
+          leftEl.innerHTML += escaped;
+          rightEl.innerHTML += escaped;
+        } else if (part.removed) {
+          leftEl.innerHTML += `<span class="diff-removed">${escaped}</span>`;
+        } else if (part.added) {
+          rightEl.innerHTML += `<span class="diff-added">${escaped}</span>`;
+        }
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Screen switching
+    function showScreen(id) {
+      document.getElementById('upload-screen').style.display = 'none';
+      document.getElementById('loading-screen').style.display = 'none';
+      document.getElementById('result-screen').style.display = 'none';
+      document.getElementById(id).style.display = 'flex';
+    }
+
+    // Compare
+    async function compare() {
+      const errorEl = document.getElementById('error-msg');
+      errorEl.textContent = '';
+
+      if (!pdfFile) {
+        errorEl.textContent = '模範解答のPDFファイルを選択してください。';
+        return;
+      }
+      if (!wordFile) {
+        errorEl.textContent = '利用者の解答Wordファイルを選択してください。';
+        return;
+      }
+
+      showScreen('loading-screen');
+
+      try {
+        const [pdfText, wordText, wordCpl] = await Promise.all([
+          extractPdfText(pdfFile),
+          extractWordText(wordFile),
+          detectWordCharsPerLine(wordFile)
+        ]);
+
+        const strippedPdf = stripHeader(pdfText);
+        const strippedWord = stripHeader(wordText);
+
+        // Remove cumulative counts from PDF lines, then normalize
+        const cleanPdf = stripCumulativeCounts(strippedPdf);
+        const normPdf = normalizeText(cleanPdf);
+        const normWord = normalizeText(strippedWord);
+
+        // Full-text diff (for overall comparison and diff view)
+        const fullPdfText = normPdf.split('\n').filter(l => l.trim() !== '').join('');
+        const fullWordText = normWord.split('\n').filter(l => l.trim() !== '').join('');
+        const diffs = Diff.diffChars(fullPdfText, fullWordText);
+
+        const rate = calcMatchRate(diffs);
+        const rateEl = document.getElementById('match-rate');
+        rateEl.textContent = rate + '%';
+        rateEl.className = 'match-rate-value ' + (rate >= 80 ? 'rate-high' : rate >= 50 ? 'rate-mid' : 'rate-low');
+
+        // PDF lines (after removing counts)
+        const pdfLines = normPdf.split('\n').filter(l => l.trim() !== '');
+
+        // Detect chars-per-line
+        const pdfCpl = detectPdfCharsPerLine(pdfLines);
+
+        // Display chars-per-line comparison
+        const pdfCplEl = document.getElementById('pdf-cpl');
+        const wordCplEl = document.getElementById('word-cpl');
+        const cplWarning = document.getElementById('cpl-warning');
+
+        pdfCplEl.textContent = pdfCpl ? pdfCpl + '字' : '不明';
+        wordCplEl.textContent = wordCpl ? wordCpl + '字' : '不明';
+
+        if (pdfCpl && wordCpl && pdfCpl !== wordCpl) {
+          pdfCplEl.className = 'cpl-value cpl-match';
+          wordCplEl.className = 'cpl-value cpl-mismatch';
+          cplWarning.innerHTML = '<div class="chars-per-line-warning">' +
+            '<strong>1行の文字数が一致していません。</strong><br>' +
+            '模範解答は<strong>' + pdfCpl + '字/行</strong>ですが、' +
+            'Wordの設定は<strong>' + wordCpl + '字/行</strong>です。<br>' +
+            'Wordのページ設定で「文字数」を' + pdfCpl + '字に変更してください。</div>';
+        } else if (pdfCpl && wordCpl && pdfCpl === wordCpl) {
+          pdfCplEl.className = 'cpl-value cpl-match';
+          wordCplEl.className = 'cpl-value cpl-match';
+          cplWarning.innerHTML = '';
+        } else {
+          pdfCplEl.className = 'cpl-value';
+          wordCplEl.className = 'cpl-value';
+          cplWarning.innerHTML = '';
+        }
+
+        const wordLines = normWord.split('\n').filter(l => l.trim() !== '');
+
+        document.getElementById('pdf-lines').textContent = pdfLines.length;
+        document.getElementById('pdf-chars').textContent = fullPdfText.length;
+        document.getElementById('word-lines').textContent = wordLines.length;
+        document.getElementById('word-chars').textContent = fullWordText.length;
+
+        // Full-text diff view
+        renderDiff(diffs);
+
+        showScreen('result-screen');
+      } catch (e) {
+        console.error(e);
+        showScreen('upload-screen');
+        errorEl.textContent = 'ファイルの解析に失敗しました: ' + e.message;
+      }
+    }
+
+    // Back
+    function goBack() {
+      pdfFile = null;
+      wordFile = null;
+
+      // Reset drop zones
+      const pdfDrop = document.getElementById('pdf-drop');
+      pdfDrop.classList.remove('has-file');
+      pdfDrop.innerHTML = '<p>クリックまたはドラッグ＆ドロップでPDFファイルを選択</p><input type="file" id="pdf-input" accept=".pdf">';
+
+      const wordDrop = document.getElementById('word-drop');
+      wordDrop.classList.remove('has-file');
+      wordDrop.innerHTML = '<p>クリックまたはドラッグ＆ドロップでWordファイルを選択</p><input type="file" id="word-input" accept=".docx">';
+
+      // Re-bind events
+      setupDropZone('pdf-drop', 'pdf-input', '.pdf', (file, drop) => {
+        pdfFile = file;
+        setFileDisplay(drop, file.name);
+      });
+      setupDropZone('word-drop', 'word-input', '.docx', (file, drop) => {
+        wordFile = file;
+        setFileDisplay(drop, file.name);
+      });
+
+      document.getElementById('error-msg').textContent = '';
+      showScreen('upload-screen');
+    }
+  </script>
+</body>
+</html>
