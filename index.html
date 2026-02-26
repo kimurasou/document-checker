@@ -728,27 +728,33 @@
           const textWidth = pageWidth - marginLeft - marginRight;
 
           // docGrid の charSpace から1行文字数を計算
-          // w:charSpace の単位は「1/100 pt」（OOXML仕様）
-          // 1文字幅(twip) = フォントサイズ(twip) + charSpace(1/100pt) × (20twip/pt) / 100
-          //               = fontSizeHalfPt/2*20 + charSpace * 20/100
-          //               = fontSizeHalfPt*10 + charSpace * 0.2
+          // charSpace の変換係数は docGrid の type により異なる（実測値から逆算）
+          //   fixedCol:      charSpace × 0.2  → twip  (charSpace 小さい: 460 程度)
+          //   linesAndChars: charSpace × 0.02 → twip  (charSpace 大きい: 4573 程度)
           const fontSizeTwip = fontSizeHalfPt / 2 * 20; // halfPt → twip
 
-          // docGrid は複数存在する場合があるので最後の要素（type=fixedColを優先）を使う
+          // docGrid は複数存在する場合があるので、charSpace を持つ最後の要素を使う
           const docGridEls = doc.getElementsByTagNameNS(ns, 'docGrid');
           let charSpace = null;
+          let gridType = null;
           for (let gi = 0; gi < docGridEls.length; gi++) {
             const el = docGridEls[gi];
             const cs = el.getAttribute('w:charSpace');
-            if (cs !== null) charSpace = cs;
+            if (cs !== null) {
+              charSpace = cs;
+              gridType = el.getAttribute('w:type') || gridType;
+            }
           }
 
           let gotCpl = false;
           if (charSpace !== null) {
             const csVal = parseInt(charSpace);
             if (!isNaN(csVal) && csVal > 0) {
-              // charSpace(1/100pt) → twip: × 20 / 100 = × 0.2
-              const charSpaceTwip = csVal * 0.2;
+              // type に応じた変換係数を選択
+              // fixedCol: 小さい値（~460）→ × 0.2
+              // linesAndChars / その他: 大きい値（~4000以上）→ × 0.02
+              const factor = (gridType === 'fixedCol' || csVal < 1000) ? 0.2 : 0.02;
+              const charSpaceTwip = csVal * factor;
               const charWidthTwip = fontSizeTwip + charSpaceTwip;
               details.charsPerLine = Math.round(textWidth / charWidthTwip);
               gotCpl = true;
