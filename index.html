@@ -1108,16 +1108,16 @@
     }
 
     // =====================================================
-    // PDF本文を段落単位に再構成
+    // PDF本文の改行をそのまま保持して差分ビューに反映する
     // pdftotext -layout の出力形式:
-    //   段落開始行: 先頭に半角スペースが4個以上 → 全角スペース1文字（字下げ）に変換
-    //   継続行:     先頭に半角スペース1個 → 前の行に連結（折り返し）
-    // 段落間には改行を入れる
+    //   段落開始行: 先頭に半角スペースが4個以上 → 全角スペース1文字（字下げ）に変換して改行
+    //   継続行:     先頭に半角スペース1個 → 改行を保持したまま次の行に続く
+    //   段落間: 改行2つで区切る
     // =====================================================
     function reconstructPdfParagraphs(text) {
       const lines = text.split('\n');
-      const paragraphs = [];
-      let current = null;
+      const resultLines = [];
+      let prevWasParagraphStart = false;
 
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -1125,21 +1125,18 @@
         const stripped = line.trim();
 
         if (leadingSpaces >= 4) {
-          // 段落開始行: 先頭の半角スペース → 全角スペース1文字
-          if (current !== null) paragraphs.push(current);
-          current = '\u3000' + stripped;
+          // 段落開始行: 前の段落との間に空行を挿入し、先頭を全角スペースに変換
+          if (resultLines.length > 0) resultLines.push('');
+          resultLines.push('\u3000' + stripped);
+          prevWasParagraphStart = true;
         } else {
-          // 継続行: そのまま連結
-          if (current === null) {
-            current = stripped;
-          } else {
-            current += stripped;
-          }
+          // 継続行: 改行を保持したまま追加
+          resultLines.push(stripped);
+          prevWasParagraphStart = false;
         }
       }
-      if (current !== null) paragraphs.push(current);
 
-      return paragraphs.join('\n');
+      return resultLines.join('\n');
     }
 
     function normalizeText(text) {
