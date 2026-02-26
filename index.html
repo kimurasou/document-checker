@@ -725,13 +725,20 @@
       }).join('\n');
     }
 
-    // Normalize text for comparison
+    // Normalize text for comparison (preserve leading indent)
     function normalizeText(text) {
       return text
         .replace(/\r\n/g, '\n')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/ *\n */g, '\n')
         .replace(/\n{3,}/g, '\n\n')
+        .split('\n')
+        .map(line => {
+          // Preserve leading full-width space (　) or half-width space for indent
+          const indentMatch = line.match(/^([　 ]*)/);
+          const indent = indentMatch ? indentMatch[1] : '';
+          const rest = line.slice(indent.length).replace(/[ \t]+/g, ' ').trim();
+          return indent + rest;
+        })
+        .join('\n')
         .trim();
     }
 
