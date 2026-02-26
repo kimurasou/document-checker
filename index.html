@@ -723,18 +723,40 @@
           const marginRight = parseInt(pgMar.getAttribute('w:right')) || 1701;
           const textWidth = pageWidth - marginLeft - marginRight;
 
+          // まず docGrid の linePitch / charSpace から直接文字数を読む
           const docGrid = doc.getElementsByTagNameNS(ns, 'docGrid')[0];
+          let gotCpl = false;
           if (docGrid) {
+            // w:type="fixedCol" の場合は w:charSpace に1行文字数が直接入っている
+            const gridType = docGrid.getAttribute('w:type');
             const charSpace = docGrid.getAttribute('w:charSpace');
-            if (charSpace && parseInt(charSpace) > 0) {
-              const defaultCharWidth = fontSizeHalfPt * 10;
-              const totalCharWidth = defaultCharWidth + parseInt(charSpace);
-              details.charsPerLine = Math.floor(textWidth / totalCharWidth);
+            if (gridType === 'fixedCol' && charSpace) {
+              // charSpace は EMU単位ではなく「1文字幅の追加量（1/100pt×2）」
+              // 実際の1文字幅 = fontSizeHalfPt * 10 + charSpace（単位: 1/100 pt）
+              const cplVal = parseInt(charSpace);
+              if (cplVal > 0) {
+                const charWidthEmu = fontSizeHalfPt * 10 + cplVal;
+                details.charsPerLine = Math.round(textWidth / charWidthEmu);
+                gotCpl = true;
+              }
+            }
+            if (!gotCpl && charSpace) {
+              const cplVal = parseInt(charSpace);
+              if (cplVal > 0) {
+                const charWidthEmu = fontSizeHalfPt * 10 + cplVal;
+                details.charsPerLine = Math.round(textWidth / charWidthEmu);
+                gotCpl = true;
+              }
             }
           }
-          if (!details.charsPerLine) {
-            const fontSizePt = fontSizeHalfPt / 2;
-            details.charsPerLine = Math.floor(textWidth / (fontSizePt * 20));
+          // docGrid から取れなかった場合: フォントサイズから推定
+          if (!gotCpl) {
+            // Word の1文字幅 = フォントサイズ(pt) × 20 (twip)
+            // textWidth は twip 単位
+            const charWidthTwip = fontSizeHalfPt; // halfPt = twip/1 なので halfPt == twip
+            if (charWidthTwip > 0) {
+              details.charsPerLine = Math.round(textWidth / charWidthTwip);
+            }
           }
         }
 
@@ -999,39 +1021,10 @@
     // Word 1行文字数取得（比較表示用）
     // =====================================================
     async function detectWordCharsPerLine(file) {
+      // extractWordDetails と同じロジックで計算（重複実装を統一）
       try {
-        const arrayBuffer = await file.arrayBuffer();
-        const zip = await JSZip.loadAsync(arrayBuffer);
-        const parser = new DOMParser();
-        const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-        const docXml = await zip.file('word/document.xml').async('string');
-        const doc = parser.parseFromString(docXml, 'text/xml');
-        const pgSz = doc.getElementsByTagNameNS(ns, 'pgSz')[0];
-        const pgMar = doc.getElementsByTagNameNS(ns, 'pgMar')[0];
-        if (!pgSz || !pgMar) return null;
-        const pageWidth = parseInt(pgSz.getAttribute('w:w')) || 11906;
-        const marginLeft = parseInt(pgMar.getAttribute('w:left')) || 1701;
-        const marginRight = parseInt(pgMar.getAttribute('w:right')) || 1701;
-        const textWidth = pageWidth - marginLeft - marginRight;
-        let fontSizeHalfPt = 21;
-        const stylesFile = zip.file('word/styles.xml');
-        if (stylesFile) {
-          const stylesXml = await stylesFile.async('string');
-          const styleDoc = parser.parseFromString(stylesXml, 'text/xml');
-          const docDefaults = styleDoc.getElementsByTagNameNS(ns, 'docDefaults')[0];
-          if (docDefaults) {
-            const sz = docDefaults.getElementsByTagNameNS(ns, 'sz')[0];
-            if (sz) fontSizeHalfPt = parseInt(sz.getAttribute('w:val')) || 21;
-          }
-        }
-        const docGrid = doc.getElementsByTagNameNS(ns, 'docGrid')[0];
-        if (docGrid) {
-          const charSpace = docGrid.getAttribute('w:charSpace');
-          if (charSpace && parseInt(charSpace) > 0) {
-            return Math.floor(textWidth / (fontSizeHalfPt * 10 + parseInt(charSpace)));
-          }
-        }
-        return Math.floor(textWidth / ((fontSizeHalfPt / 2) * 20));
+        const details = await extractWordDetails(file);
+        return details.charsPerLine;
       } catch (e) {
         return null;
       }
@@ -1073,96 +1066,67 @@
         /無断複製/, /複製を禁/, /〘/, /〙/, /⑨/, /\(c\)/i,  // 著作権表記
       ];
 
-      // ② 書式設定・注意事項ブロックを除外
+      // ② 書式設定・注意事項ブロックを除外するパターン
       const sectionStartPatterns = [
         /[〔\[【「]\s*書\s*式\s*設\s*定\s*[〕\]】」]/,
         /[〔\[【「]\s*注\s*意\s*事\s*項\s*[〕\]】」]/,
         /試験委員の指示/,
       ];
 
-      // ③ 書式設定・注意事項ブロック終端（本文開始）を検出するパターン
-      // 本文は段落インデント（全角スペース）で始まる行、または
-      // 注意事項の最後の項目の後に来る
-      const bodyStartPatterns = [
-        /^[　\s]{1,3}[^ａｂｃａｂｃ１２３４５６1-9]/, // 全角スペースインデントで始まる本文
-      ];
-
-      // ステップ1: 前付きヘッダー行をスキップ
-      let i = 0;
-      while (i < lines.length) {
-        const line = lines[i].replace(/[\x00-\x1F\x7F]/g, '').trim();
-        if (line === '') { i++; continue; }
-        const isHeaderLine = headerLinePatterns.some(p => p.test(line));
-        if (isHeaderLine) { i++; continue; }
-        break;
+      // スキップブロック内と判定する行パターン
+      // a./b./c. 書式設定項目、1./2.../6. 注意事項項目、折り返し継続行、受験番号欄
+      function isSkipBlockLine(line) {
+        if (/^[ａｂｃａｂｃabc]\s*[．.]/.test(line)) return true;  // 書式設定 a. b. c.
+        if (/^[１２３４５６７８９1-9]\s*[．．]/.test(line)) return true; // 注意事項 1. 2. ...
+        if (/^[１２３４５６７８９1-9]\s*\./.test(line)) return true;
+        // 折り返し継続行：句点・読点で終わる短い行、または特定の語で始まる行
+        if (/^(こと。?$|に行うこと|ない。$|ない$|する。$|ること。$|こと$)/.test(line)) return true;
+        if (/受\s*験\s*番\s*号/.test(line)) return true;
+        if (headerLinePatterns.some(p => p.test(line))) return true;
+        // 注意事項の折り返し行：前の行が注意事項項目で、この行が文の続き（句点で終わる）
+        return false;
       }
 
-      // ステップ2: 書式設定・注意事項ブロックをスキップ
+      // ステップ1: 全行を走査し、スキップすべき行を除外して本文行だけ残す
+      // アプローチ: セクション開始を検出したら「スキップモード」に入り、
+      // 本文らしい行（全角スペースインデントで始まる段落）が来たら終了
       let inSkipBlock = false;
-      let bodyStartIndex = i;
+      const bodyLines = [];
       let foundBody = false;
 
-      for (let j = i; j < lines.length; j++) {
-        const line = lines[j].replace(/[\x00-\x1F\x7F]/g, '').trim();
-        if (line === '') continue;
+      for (let j = 0; j < lines.length; j++) {
+        const raw = lines[j].replace(/[\x00-\x1F\x7F]/g, '');
+        const line = raw.trim();
 
-        // セクション開始検出
+        if (line === '') {
+          // 空行はスキップブロック外のみ保持
+          if (foundBody && !inSkipBlock) bodyLines.push(raw);
+          continue;
+        }
+
+        // ヘッダー行は常に除外
+        if (headerLinePatterns.some(p => p.test(line))) continue;
+        // 受験番号欄は常に除外
+        if (/受\s*験\s*番\s*号/.test(line)) continue;
+
+        // セクション開始検出 → スキップモード開始
         if (sectionStartPatterns.some(p => p.test(line))) {
           inSkipBlock = true;
           continue;
         }
 
         if (inSkipBlock) {
-          // 書式設定・注意事項ブロック内の行パターン
-          // a. b. c. や 1. 2. 3. で始まる行はスキップ
-          const isFormatItem = /^[ａｂｃａｂｃabc]\s*[．.]/.test(line);
-          const isNoticeItem = /^[１２３４５６７８９1-9]\s*[．.]/.test(line);
-          const isContinuation = /^(こと|に行うこと|ない。|ない|する。)/.test(line); // 折り返し行
-          const isReceiptBox = /受\s*験\s*番\s*号/.test(line);
-
-          if (isFormatItem || isNoticeItem || isContinuation || isReceiptBox) {
-            continue; // スキップブロック内の継続行
+          if (isSkipBlockLine(line)) {
+            continue; // スキップブロック内の行
           }
-
-          // ヘッダー行もスキップ
-          if (headerLinePatterns.some(p => p.test(line))) {
-            continue;
-          }
-
-          // 本文らしい行が来たらブロック終了
+          // 本文らしい行が来た → スキップモード終了
           inSkipBlock = false;
-          bodyStartIndex = j;
           foundBody = true;
-          break;
-        } else if (!foundBody) {
-          // ヘッダー除外後、最初の非ヘッダー行が本文開始
-          bodyStartIndex = j;
+          bodyLines.push(raw);
+        } else {
           foundBody = true;
-          break;
+          bodyLines.push(raw);
         }
-      }
-
-      if (!foundBody) return '';
-
-      // ステップ3: 本文を結合して返す（2ページ目以降の重複ヘッダーも除去）
-      const bodyLines = [];
-      let skipNextHeader = false;
-      for (let k = bodyStartIndex; k < lines.length; k++) {
-        const raw = lines[k].replace(/[\x00-\x1F\x7F]/g, '');
-        const trimmed = raw.trim();
-
-        // 2ページ目以降の試験名ヘッダー行を除外
-        if (headerLinePatterns.some(p => p.test(trimmed))) continue;
-        // 受験番号欄を除外
-        if (/受\s*験\s*番\s*号/.test(trimmed)) continue;
-        // 書式設定・注意事項ブロックが再出現した場合も除外
-        if (sectionStartPatterns.some(p => p.test(trimmed))) { skipNextHeader = true; continue; }
-        if (skipNextHeader) {
-          if (/^[ａｂｃabc１２３４５６1-9]\s*[．.]/.test(trimmed) || trimmed === '') continue;
-          skipNextHeader = false;
-        }
-
-        bodyLines.push(raw);
       }
 
       return bodyLines.join('\n').trim();
