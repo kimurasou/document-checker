@@ -1241,7 +1241,8 @@
 
         // 行・文字数比較
         const pdfLines = normPdf.split('\n').filter(l => l.trim() !== '');
-        const pdfCpl = detectPdfCharsPerLine(pdfLines);
+        // 模範解答の1行文字数はPDF1ページ目の書式設定（rules.charsPerLine）を使用
+        const pdfCpl = rules.charsPerLine || detectPdfCharsPerLine(pdfLines);
         const pdfCplEl = document.getElementById('pdf-cpl');
         const wordCplEl = document.getElementById('word-cpl');
         const cplWarning = document.getElementById('cpl-warning');
