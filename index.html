@@ -201,7 +201,7 @@
 
     @media (max-width: 640px) { .diff-view { grid-template-columns: 1fr; } }
 
-    .diff-panel { background: #0f172a; border-radius: 12px; padding: 16px; overflow-x: auto; }
+    .diff-panel { background: #0f172a; border-radius: 12px; padding: 16px; overflow: hidden; }
 
     .diff-panel h3 {
       font-size: 0.9rem; color: #94a3b8;
@@ -210,7 +210,15 @@
     }
 
     .diff-content { font-size: 0.9rem; line-height: 1.8; white-space: pre-wrap; word-break: break-all; }
-    #diff-left { white-space: pre; word-break: normal; overflow-x: auto; }
+    /* 左側（模範解答）: 改行をそのまま表示、横スクロール対応 */
+    #diff-left {
+      white-space: pre;
+      word-break: normal;
+      overflow-x: auto;
+      font-family: 'MS Mincho', 'Yu Mincho', '游明朝', serif;
+      font-size: 0.85rem;
+      line-height: 1.8;
+    }
 
     .diff-removed {
       background: rgba(239, 68, 68, 0.25); color: #fca5a5;
