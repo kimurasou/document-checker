@@ -340,6 +340,18 @@
     .rule-value { color: #e2e8f0; font-weight: 600; }
     .rule-value.detected { color: #38bdf8; }
     .rule-value.not-detected { color: #475569; font-style: italic; }
+
+    .exam-type-badge {
+      display: inline-block;
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin-left: 10px;
+      vertical-align: middle;
+    }
+    .exam-type-badge.speed { background: rgba(37, 99, 235, 0.2); color: #60a5fa; }
+    .exam-type-badge.practical { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
   </style>
 </head>
 <body>
@@ -575,6 +587,8 @@
     // =====================================================
     function extractRulesFromPdf(pdfText) {
       const rules = {
+        // 試験タイプ
+        examType: 'speed',           // 'speed' or 'practical'
         // 書式設定
         charsPerLine: null,          // 1行の文字数（数値）
         fontType: null,              // フォント種類（文字列）
@@ -585,6 +599,10 @@
         punctuationMixForbidden: null, // 句読点混用禁止（boolean）
         punctuationAltAllowed: null,   // 句点↔ピリオド、読点↔コンマ代替可（boolean）
         noRepeatInput: null,           // 繰り返し入力禁止（boolean）
+        // 実技用ルール
+        margins: null,               // 余白（mm）
+        fontSize: null,              // フォントサイズ（pt）
+        linesPerPage: null,          // 1ページの行数
         // 生テキスト（デバッグ用）
         formatSection: '',
         noticeSection: ''
@@ -592,6 +610,14 @@
 
       // 改行を正規化
       const text = pdfText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+      // 試験タイプ自動判定
+      if (/ビジネス文書部門|実技部門/.test(text)) {
+        rules.examType = 'practical';
+      } else if (/速度部門/.test(text)) {
+        rules.examType = 'speed';
+      }
+
       const lines = text.split('\n');
 
       // 書式設定セクションと注意事項セクションを切り出す
@@ -676,6 +702,29 @@
         rules.noRepeatInput = true;
       }
 
+      // ---- 実技用ルール抽出 ----
+      if (rules.examType === 'practical') {
+        const fullText = rules.formatSection + '\n' + rules.noticeSection + '\n' + text;
+
+        // 余白（例: 余白 25mm, 余白は25ｍｍ）
+        const marginMatch = fullText.match(/余白[はを]?\s*([0-9０-９]+)\s*[mｍ]{1,2}/);
+        if (marginMatch) {
+          rules.margins = parseInt(marginMatch[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)));
+        }
+
+        // フォントサイズ（例: サイズは14ポイント）
+        const fontSizeMatch = fullText.match(/サイズ[はを]?\s*([0-9０-９]+)\s*ポイント/);
+        if (fontSizeMatch) {
+          rules.fontSize = parseInt(fontSizeMatch[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)));
+        }
+
+        // 行数（例: 1ページの行数を28行）
+        const linesMatch = fullText.match(/1ページ[のに]?\s*行数[はをに]?\s*([0-9０-９]+)\s*行/);
+        if (linesMatch) {
+          rules.linesPerPage = parseInt(linesMatch[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)));
+        }
+      }
+
       return rules;
     }
 
@@ -686,6 +735,16 @@
       const grid = document.getElementById('rules-grid');
       grid.innerHTML = '';
 
+      // 試験タイプバッジを表示
+      const rulesCard = grid.closest('.rules-card');
+      const h2 = rulesCard.querySelector('h2');
+      // 既存のバッジを除去
+      const existingBadge = h2.querySelector('.exam-type-badge');
+      if (existingBadge) existingBadge.remove();
+      const badgeLabel = rules.examType === 'practical' ? '実技部門' : '速度部門';
+      const badgeClass = rules.examType === 'practical' ? 'practical' : 'speed';
+      h2.innerHTML = `PDFから読み取ったルール<span class="exam-type-badge ${badgeClass}">${badgeLabel}</span>`;
+
       const items = [
         { label: '書式設定 a｜1行の文字数', value: rules.charsPerLine !== null ? `${rules.charsPerLine}字` : null },
         { label: '書式設定 b｜フォント種類', value: rules.fontType || null },
@@ -694,6 +753,15 @@
         { label: '注意事項 3｜長音', value: rules.longVowelRequired ? '長音記号（ー）を使用' : null },
         { label: '注意事項 5｜句読点混用', value: rules.punctuationMixForbidden ? '混用禁止（エラー）' : null },
       ];
+
+      // 実技用ルールを追加
+      if (rules.examType === 'practical') {
+        items.push(
+          { label: '実技｜余白', value: rules.margins !== null ? `${rules.margins}mm` : null },
+          { label: '実技｜フォントサイズ', value: rules.fontSize !== null ? `${rules.fontSize}ポイント` : null },
+          { label: '実技｜1ページの行数', value: rules.linesPerPage !== null ? `${rules.linesPerPage}行` : null },
+        );
+      }
 
       for (const item of items) {
         const detected = item.value !== null;
@@ -715,7 +783,14 @@
         charsPerLine: null,
         fontNames: [],
         hasProportionalFont: false,
-        bodyText: ''
+        bodyText: '',
+        // 実技用
+        margins: null,           // { top, bottom, left, right } in mm
+        defaultFontSize: null,   // pt
+        linesPerPage: null,
+        paragraphAlignments: [], // [{text, align}]
+        tables: [],              // [{rows, cols, cells}]
+        hasWideScaling: false,   // 横倍角 (200%)
       };
 
       try {
@@ -785,6 +860,85 @@
           // charSpace が取れなかった場合: フォントサイズのみで推定
           if (!gotCpl && fontSizeTwip > 0) {
             details.charsPerLine = Math.round(textWidth / fontSizeTwip);
+          }
+        }
+
+        // ---- 実技用: 余白 (twips → mm, 1 twip = 1/1440 inch = 25.4/1440 mm ≈ /56.7) ----
+        if (pgMar) {
+          details.margins = {
+            top: Math.round((parseInt(pgMar.getAttribute('w:top')) || 0) / 56.7),
+            bottom: Math.round((parseInt(pgMar.getAttribute('w:bottom')) || 0) / 56.7),
+            left: Math.round((parseInt(pgMar.getAttribute('w:left')) || 0) / 56.7),
+            right: Math.round((parseInt(pgMar.getAttribute('w:right')) || 0) / 56.7),
+          };
+        }
+
+        // ---- 実技用: デフォルトフォントサイズ (halfPt → pt) ----
+        details.defaultFontSize = fontSizeHalfPt / 2;
+
+        // ---- 実技用: 1ページの行数 ----
+        if (pgSz && pgMar) {
+          const pageHeight = parseInt(pgSz.getAttribute('w:h')) || 16838;
+          const marginTop = parseInt(pgMar.getAttribute('w:top')) || 1985;
+          const marginBottom = parseInt(pgMar.getAttribute('w:bottom')) || 1701;
+          const textHeight = pageHeight - marginTop - marginBottom;
+          const docGridEls2 = doc.getElementsByTagNameNS(ns, 'docGrid');
+          for (let gi = 0; gi < docGridEls2.length; gi++) {
+            const lp = docGridEls2[gi].getAttribute('w:linePitch');
+            if (lp) {
+              const linePitch = parseInt(lp);
+              if (linePitch > 0) {
+                details.linesPerPage = Math.floor(textHeight / linePitch);
+              }
+            }
+          }
+        }
+
+        // ---- 実技用: 段落配置 (w:jc) ----
+        const paragraphs2 = doc.getElementsByTagNameNS(ns, 'p');
+        for (let pi = 0; pi < paragraphs2.length; pi++) {
+          const p = paragraphs2[pi];
+          const runs = p.getElementsByTagNameNS(ns, 't');
+          let text = '';
+          for (let ri = 0; ri < runs.length; ri++) text += runs[ri].textContent || '';
+          if (!text.trim()) continue;
+
+          const pPr = p.getElementsByTagNameNS(ns, 'pPr')[0];
+          let align = 'left';
+          if (pPr) {
+            const jc = pPr.getElementsByTagNameNS(ns, 'jc')[0];
+            if (jc) align = jc.getAttribute('w:val') || 'left';
+          }
+          details.paragraphAlignments.push({ text: text.trim(), align });
+        }
+
+        // ---- 実技用: 表構造 (w:tbl) ----
+        const tables = doc.getElementsByTagNameNS(ns, 'tbl');
+        for (let ti = 0; ti < tables.length; ti++) {
+          const tbl = tables[ti];
+          const trs = tbl.getElementsByTagNameNS(ns, 'tr');
+          let maxCols = 0;
+          const cells = [];
+          for (let ri = 0; ri < trs.length; ri++) {
+            const tcs = trs[ri].getElementsByTagNameNS(ns, 'tc');
+            if (tcs.length > maxCols) maxCols = tcs.length;
+            for (let ci = 0; ci < tcs.length; ci++) {
+              const tEls = tcs[ci].getElementsByTagNameNS(ns, 't');
+              let cellText = '';
+              for (let t = 0; t < tEls.length; t++) cellText += tEls[t].textContent || '';
+              cells.push({ row: ri, col: ci, text: cellText.trim() });
+            }
+          }
+          details.tables.push({ rows: trs.length, cols: maxCols, cells });
+        }
+
+        // ---- 実技用: 横倍角 (w:w val="200") ----
+        const wEls = doc.getElementsByTagNameNS(ns, 'w');
+        for (let wi = 0; wi < wEls.length; wi++) {
+          // w:w is within w:rPr — check tagName is 'w:w'
+          if (wEls[wi].localName === 'w' && wEls[wi].getAttribute('w:val') === '200') {
+            details.hasWideScaling = true;
+            break;
           }
         }
 
@@ -1005,6 +1159,89 @@
         }
       }
 
+      // =====================================================
+      // 実技用チェック項目（examType === 'practical' の場合のみ）
+      // =====================================================
+      if (rules.examType === 'practical') {
+
+        // ---- 余白チェック ----
+        if (rules.margins !== null && wordDetails.margins) {
+          const m = wordDetails.margins;
+          const target = rules.margins;
+          const tolerance = 2;
+          const sides = [
+            { name: '上', val: m.top },
+            { name: '下', val: m.bottom },
+            { name: '左', val: m.left },
+            { name: '右', val: m.right },
+          ];
+          const mismatches = sides.filter(s => Math.abs(s.val - target) > tolerance);
+          if (mismatches.length === 0) {
+            results.push({ category: '実技', title: `余白（${target}mm）`,
+              status: 'pass', detail: `上下左右の余白が ${target}mm に設定されています（上${m.top}mm 下${m.bottom}mm 左${m.left}mm 右${m.right}mm）。` });
+          } else {
+            const details = mismatches.map(s => `${s.name}: ${s.val}mm`).join('、');
+            results.push({ category: '実技', title: `余白（${target}mm）`,
+              status: 'fail', detail: `余白が指定値（${target}mm）と異なります。${details}。許容範囲: ±${tolerance}mm。` });
+          }
+        }
+
+        // ---- フォントサイズチェック ----
+        if (rules.fontSize !== null && wordDetails.defaultFontSize !== null) {
+          if (wordDetails.defaultFontSize === rules.fontSize) {
+            results.push({ category: '実技', title: `フォントサイズ（${rules.fontSize}pt）`,
+              status: 'pass', detail: `デフォルトフォントサイズが ${rules.fontSize}pt に設定されています。` });
+          } else {
+            results.push({ category: '実技', title: `フォントサイズ（${rules.fontSize}pt）`,
+              status: 'fail', detail: `デフォルトフォントサイズが ${wordDetails.defaultFontSize}pt です。${rules.fontSize}pt に変更してください。` });
+          }
+        }
+
+        // ---- 行数チェック ----
+        if (rules.linesPerPage !== null && wordDetails.linesPerPage !== null) {
+          if (wordDetails.linesPerPage === rules.linesPerPage) {
+            results.push({ category: '実技', title: `1ページの行数（${rules.linesPerPage}行）`,
+              status: 'pass', detail: `1ページの行数が ${rules.linesPerPage} 行に設定されています。` });
+          } else {
+            results.push({ category: '実技', title: `1ページの行数（${rules.linesPerPage}行）`,
+              status: 'fail', detail: `1ページの行数が ${wordDetails.linesPerPage} 行です。${rules.linesPerPage} 行に変更してください。` });
+          }
+        }
+
+        // ---- 段落配置チェック（右寄せ・センタリング） ----
+        const rightAligned = wordDetails.paragraphAlignments.filter(p => p.align === 'right');
+        const centerAligned = wordDetails.paragraphAlignments.filter(p => p.align === 'center');
+        if (rightAligned.length > 0 || centerAligned.length > 0) {
+          const detail = [];
+          if (rightAligned.length > 0) detail.push(`右寄せ: ${rightAligned.length}箇所（${rightAligned.map(p => '「' + p.text.slice(0, 20) + '」').join('、')}）`);
+          if (centerAligned.length > 0) detail.push(`センタリング: ${centerAligned.length}箇所（${centerAligned.map(p => '「' + p.text.slice(0, 20) + '」').join('、')}）`);
+          results.push({ category: '実技', title: '段落配置（右寄せ・センタリング）',
+            status: 'pass', detail: detail.join('\n') });
+        } else {
+          results.push({ category: '実技', title: '段落配置（右寄せ・センタリング）',
+            status: 'warn', detail: '右寄せやセンタリングが検出されませんでした。実技問題では通常必要です。' });
+        }
+
+        // ---- 横倍角チェック ----
+        if (wordDetails.hasWideScaling) {
+          results.push({ category: '実技', title: '横倍角（200%スケーリング）',
+            status: 'pass', detail: '横200%スケーリング（横倍角）が適用されています。' });
+        } else {
+          results.push({ category: '実技', title: '横倍角（200%スケーリング）',
+            status: 'warn', detail: '横倍角（200%スケーリング）が検出されませんでした。問題の指示を確認してください。' });
+        }
+
+        // ---- 表構造チェック ----
+        if (wordDetails.tables.length > 0) {
+          const tableDetails = wordDetails.tables.map((t, i) => `表${i + 1}: ${t.rows}行 × ${t.cols}列`).join('、');
+          results.push({ category: '実技', title: '表構造',
+            status: 'pass', detail: `表が検出されました。${tableDetails}` });
+        } else {
+          results.push({ category: '実技', title: '表構造',
+            status: 'unknown', detail: '表が検出されませんでした。問題に表が含まれる場合は確認してください。' });
+        }
+      }
+
       return results;
     }
 
@@ -1088,6 +1325,24 @@
         if (freq[len] > maxCount) { maxCount = freq[len]; mode = len; }
       }
       return mode;
+    }
+
+    // =====================================================
+    // 実技PDF青色注釈の除去
+    // =====================================================
+    function stripAnnotations(text) {
+      return text.split('\n').map(line => {
+        // 「← 右寄せする。」「→ センタリング」等の矢印注釈を除去
+        let cleaned = line.replace(/[←→]\s*.+$/g, '');
+        // 「フォントは横200%...」「表の行間は...」「枠内で...」等の指示テキストを除去
+        cleaned = cleaned.replace(/フォントは横\d+%.*/g, '');
+        cleaned = cleaned.replace(/表の行間は.*/g, '');
+        cleaned = cleaned.replace(/枠内で.*/g, '');
+        cleaned = cleaned.replace(/横倍角.*/g, '');
+        cleaned = cleaned.replace(/センタリング.*/g, '');
+        cleaned = cleaned.replace(/右寄せ.*/g, '');
+        return cleaned.trimEnd();
+      }).join('\n');
     }
 
     function stripHeader(text) {
@@ -1295,7 +1550,12 @@
         renderRules(rules);
 
         // 2ページ目以降：問題文（模範解答テキスト）
-        const bodyPdfText = pdfPages.slice(1).join('\n');
+        let bodyPdfText = pdfPages.slice(1).join('\n');
+
+        // 実技の場合、青色注釈を除去
+        if (rules.examType === 'practical') {
+          bodyPdfText = stripAnnotations(bodyPdfText);
+        }
 
         // ===== PDF: 表示用テキスト（PDF通りの30字改行・インデント）=====
         const strippedPdf = stripHeader(bodyPdfText);
