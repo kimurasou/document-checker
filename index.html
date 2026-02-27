@@ -1236,97 +1236,26 @@
     }
 
     // 差分ビュー表示:
-    // - 左側: pdfDisplayTextをベースに、差分で削除された文字を赤ハイライト
-    // - 右側: wordDisplayTextをベースに、差分で追加された文字を緑ハイライト
-    // - 差分は改行除外の純粋テキストで比較し、表示は各ファイルの構造を保持
-    function renderDiff(diffs, pdfDisplayText, wordDisplayText) {
+    // 表示テキスト同士を直接diff比較し、各側の改行・インデント構造をそのまま保持
+    function renderDiff(pdfDisplayText, wordDisplayText) {
       const leftEl = document.getElementById('diff-left');
       const rightEl = document.getElementById('diff-right');
+      leftEl.innerHTML = '';
+      rightEl.innerHTML = '';
 
-      // 差分から削除文字・追加文字のセットを取得
-      const removedChars = new Set();
-      const addedChars = new Set();
-      // 差分の各文字位置を記録（左側は削除位置、右側は追加位置）
-      let pdfPos = 0;
-      let wordPos = 0;
-      const pdfRemovedRanges = []; // [{start, end}]
-      const wordAddedRanges = [];  // [{start, end}]
+      const diffs = Diff.diffChars(pdfDisplayText, wordDisplayText);
 
-      // 差分のテキストは改行除外の純粋テキストに対応する
-      // pdfCompareTextの位置 → pdfDisplayTextの位置に変換するマップを作成
-      const pdfCompareText = pdfDisplayText.split('\n').map(l => l.trim()).filter(l => l).join('');
-      const wordCompareText = wordDisplayText.split('\n').map(l => l.trim()).filter(l => l).join('');
-
-      // compareTextのインデックス → displayTextのインデックスのマッピング
-      function buildIndexMap(displayText) {
-        const map = []; // map[compareIdx] = displayIdx
-        let di = 0;
-        for (let ci = 0; ci < displayText.length; ) {
-          const ch = displayText[di];
-          if (ch === '\n' || ch === '\u3000') {
-            di++; // 改行・全角スペースはスキップ
-          } else {
-            map[ci] = di;
-            ci++; di++;
-          }
-          if (di >= displayText.length) break;
-        }
-        return map;
-      }
-
-      const pdfMap = buildIndexMap(pdfDisplayText);
-      const wordMap = buildIndexMap(wordDisplayText);
-
-      // 差分から削除・追加の位置を特定
-      let pci = 0, wci = 0;
       for (const part of diffs) {
+        const escaped = escapeHtml(part.value);
         if (!part.added && !part.removed) {
-          pci += part.value.length;
-          wci += part.value.length;
+          leftEl.innerHTML += escaped;
+          rightEl.innerHTML += escaped;
         } else if (part.removed) {
-          pdfRemovedRanges.push({ start: pci, end: pci + part.value.length });
-          pci += part.value.length;
+          leftEl.innerHTML += `<span class="diff-removed">${escaped}</span>`;
         } else if (part.added) {
-          wordAddedRanges.push({ start: wci, end: wci + part.value.length });
-          wci += part.value.length;
+          rightEl.innerHTML += `<span class="diff-added">${escaped}</span>`;
         }
       }
-
-      // displayTextを文字単位でレンダリング
-      // - 改行: 左側は\nそのまま（white-space:preで表示）、右側は<br>に変換
-      // - 全角スペース: 比較テキストに含まれないのでciはインクリメントしない
-      // - 通常文字: 差分ハイライトを適用してciをインクリメント
-      function renderText(displayText, ranges, el, isLeft) {
-        let html = '';
-        let ci = 0;
-        for (let di = 0; di < displayText.length; di++) {
-          const ch = displayText[di];
-          if (ch === '\n') {
-            html += '\n';
-            continue;
-          }
-          if (ch === '\u3000') {
-            // 全角スペース（インデント）: 比較テキストに含まれないのでそのまま表示、ciはインクリメントしない
-            html += '\u3000';
-            continue;
-          }
-          // 通常文字: 差分ハイライトを適用
-          const inRange = ranges.some(r => ci >= r.start && ci < r.end);
-          const escaped = escapeHtml(ch);
-          if (inRange) {
-            html += isLeft
-              ? `<span class="diff-removed">${escaped}</span>`
-              : `<span class="diff-added">${escaped}</span>`;
-          } else {
-            html += escaped;
-          }
-          ci++;
-        }
-        el.innerHTML = html;
-      }
-
-      renderText(pdfDisplayText, pdfRemovedRanges, leftEl, true);
-      renderText(wordDisplayText, wordAddedRanges, rightEl, false);
     }
 
     function escapeHtml(str) {
@@ -1453,7 +1382,7 @@
         document.getElementById('word-lines').textContent = wordLines.length;
         document.getElementById('word-chars').textContent = wordCompareText.length;
 
-        renderDiff(diffs, pdfDisplayText, wordDisplayText);
+        renderDiff(pdfDisplayText, wordDisplayText);
         showScreen('result-screen');
 
       } catch (e) {
