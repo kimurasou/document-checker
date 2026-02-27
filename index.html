@@ -1167,23 +1167,100 @@
       return totalChars === 0 ? 100 : Math.round((matchChars / totalChars) * 100);
     }
 
-    function renderDiff(diffs) {
+    // 差分ビュー表示:
+    // - 左側: pdfDisplayTextをベースに、差分で削除された文字を赤ハイライト
+    // - 右側: wordDisplayTextをベースに、差分で追加された文字を緑ハイライト
+    // - 差分は改行除外の純粋テキストで比較し、表示は各ファイルの構造を保持
+    function renderDiff(diffs, pdfDisplayText, wordDisplayText) {
       const leftEl = document.getElementById('diff-left');
       const rightEl = document.getElementById('diff-right');
-      leftEl.innerHTML = ''; rightEl.innerHTML = '';
+
+      // 差分から削除文字・追加文字のセットを取得
+      const removedChars = new Set();
+      const addedChars = new Set();
+      // 差分の各文字位置を記録（左側は削除位置、右側は追加位置）
+      let pdfPos = 0;
+      let wordPos = 0;
+      const pdfRemovedRanges = []; // [{start, end}]
+      const wordAddedRanges = [];  // [{start, end}]
+
+      // 差分のテキストは改行除外の純粋テキストに対応する
+      // pdfCompareTextの位置 → pdfDisplayTextの位置に変換するマップを作成
+      const pdfCompareText = pdfDisplayText.split('\n').map(l => l.trim()).filter(l => l).join('');
+      const wordCompareText = wordDisplayText.split('\n').map(l => l.trim()).filter(l => l).join('');
+
+      // compareTextのインデックス → displayTextのインデックスのマッピング
+      function buildIndexMap(displayText) {
+        const map = []; // map[compareIdx] = displayIdx
+        let di = 0;
+        for (let ci = 0; ci < displayText.length; ) {
+          const ch = displayText[di];
+          if (ch === '\n' || ch === '\u3000') {
+            di++; // 改行・全角スペースはスキップ
+          } else {
+            map[ci] = di;
+            ci++; di++;
+          }
+          if (di >= displayText.length) break;
+        }
+        return map;
+      }
+
+      const pdfMap = buildIndexMap(pdfDisplayText);
+      const wordMap = buildIndexMap(wordDisplayText);
+
+      // 差分から削除・追加の位置を特定
+      let pci = 0, wci = 0;
       for (const part of diffs) {
-        // 左側(pre): \n をそのまま使う。右側: <br> に変換
-        const escapedLeft = escapeHtml(part.value);
-        const escapedRight = escapeHtml(part.value).replace(/\n/g, '<br>');
         if (!part.added && !part.removed) {
-          leftEl.innerHTML += escapedLeft;
-          rightEl.innerHTML += escapedRight;
+          pci += part.value.length;
+          wci += part.value.length;
         } else if (part.removed) {
-          leftEl.innerHTML += `<span class="diff-removed">${escapedLeft}</span>`;
+          pdfRemovedRanges.push({ start: pci, end: pci + part.value.length });
+          pci += part.value.length;
         } else if (part.added) {
-          rightEl.innerHTML += `<span class="diff-added">${escapedRight}</span>`;
+          wordAddedRanges.push({ start: wci, end: wci + part.value.length });
+          wci += part.value.length;
         }
       }
+
+      // pdfDisplayTextを文字単位でレンダリング（改行・全角スペースはそのまま、本文文字は差分ハイライト）
+      function renderText(displayText, ranges, el, isLeft) {
+        let html = '';
+        let ci = 0; // compareTextのインデックス
+        for (let di = 0; di < displayText.length; di++) {
+          const ch = displayText[di];
+          if (ch === '\n') {
+            html += '\n';
+            continue;
+          }
+          if (ch === '\u3000') {
+            // 全角スペース（インデント）: 改行直後の字下げはそのまま表示
+            html += '\u3000';
+            continue;
+          }
+          // 通常文字: 差分ハイライトを適用
+          const inRange = ranges.some(r => ci >= r.start && ci < r.end);
+          const escaped = escapeHtml(ch);
+          if (inRange) {
+            html += isLeft
+              ? `<span class="diff-removed">${escaped}</span>`
+              : `<span class="diff-added">${escaped}</span>`;
+          } else {
+            html += escaped;
+          }
+          ci++;
+        }
+        if (isLeft) {
+          el.innerHTML = html;
+        } else {
+          // 右側: \n を <br> に変換
+          el.innerHTML = html.replace(/\n/g, '<br>');
+        }
+      }
+
+      renderText(pdfDisplayText, pdfRemovedRanges, leftEl, true);
+      renderText(wordDisplayText, wordAddedRanges, rightEl, false);
     }
 
     function escapeHtml(str) {
@@ -1225,18 +1302,24 @@
         // 2ページ目以降：問題文（模範解答テキスト）
         const bodyPdfText = pdfPages.slice(1).join('\n');
 
-        // テキスト比較
-        // PDF: ヘッダー除去 → 累積文字数除去 → 段落再構成（折り返し行を連結、字下げを全角スペースに）
+        // ===== PDF: 表示用テキスト（PDF通りの30字改行・インデント）=====
         const strippedPdf = stripHeader(bodyPdfText);
         const cleanPdf = stripCumulativeCounts(strippedPdf);
-        const normPdf = reconstructPdfParagraphs(cleanPdf);
-        // Word: ヘッダー除去 → 正規化
+        const pdfDisplayText = reconstructPdfParagraphs(cleanPdf);
+
+        // ===== Word: 表示用テキスト（段落単位の改行）=====
         const strippedWord = stripHeader(wordText);
-        const normWord = normalizeText(strippedWord);
-        // 改行・字下げスペースを保持したまま比較（空行のみ除外）
-        const fullPdfText = normPdf.split('\n').filter(l => l.trim() !== '').join('\n');
-        const fullWordText = normWord.split('\n').filter(l => l.trim() !== '').join('\n');
-        const diffs = Diff.diffChars(fullPdfText, fullWordText);
+        const wordDisplayText = normalizeText(strippedWord);
+
+        // ===== 差分比較用テキスト（改行・インデントを除去して本文のみ比較）=====
+        // 改行を除去し、段落間を連結して純粋な文字列として比較
+        const pdfCompareText = pdfDisplayText.split('\n').map(l => l.trim()).filter(l => l).join('');
+        const wordCompareText = wordDisplayText.split('\n').map(l => l.trim()).filter(l => l).join('');
+        const diffs = Diff.diffChars(pdfCompareText, wordCompareText);
+
+        // 表示用テキスト（行数・文字数カウント用）
+        const fullPdfText = pdfDisplayText;
+        const fullWordText = wordDisplayText;
 
         const rate = calcMatchRate(diffs);
         const rateEl = document.getElementById('match-rate');
@@ -1248,9 +1331,8 @@
         renderFormatChecks(checkResults);
 
         // 行・文字数比較
-        const pdfLines = normPdf.split('\n').filter(l => l.trim() !== '');
         // 模範解答の1行文字数はPDF1ページ目の書式設定（rules.charsPerLine）を使用
-        const pdfCpl = rules.charsPerLine || detectPdfCharsPerLine(pdfLines);
+        const pdfCpl = rules.charsPerLine || null;
         const pdfCplEl = document.getElementById('pdf-cpl');
         const wordCplEl = document.getElementById('word-cpl');
         const cplWarning = document.getElementById('cpl-warning');
@@ -1276,13 +1358,14 @@
           cplWarning.innerHTML = '';
         }
 
-        const wordLines = normWord.split('\n').filter(l => l.trim() !== '');
+        const pdfLines = pdfDisplayText.split('\n').filter(l => l.trim() !== '');
+        const wordLines = wordDisplayText.split('\n').filter(l => l.trim() !== '');
         document.getElementById('pdf-lines').textContent = pdfLines.length;
-        document.getElementById('pdf-chars').textContent = fullPdfText.length;
+        document.getElementById('pdf-chars').textContent = pdfCompareText.length;
         document.getElementById('word-lines').textContent = wordLines.length;
-        document.getElementById('word-chars').textContent = fullWordText.length;
+        document.getElementById('word-chars').textContent = wordCompareText.length;
 
-        renderDiff(diffs);
+        renderDiff(diffs, pdfDisplayText, wordDisplayText);
         showScreen('result-screen');
 
       } catch (e) {
