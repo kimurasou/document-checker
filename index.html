@@ -209,15 +209,13 @@
       border-bottom: 1px solid #334155;
     }
 
-    .diff-content { font-size: 0.9rem; line-height: 1.8; white-space: pre-wrap; word-break: break-all; }
-    /* 左側（模範解答）: 改行・インデントをそのまま表示 */
-    #diff-left {
+    .diff-content {
+      font-size: 0.9rem;
+      line-height: 1.8;
       white-space: pre;
       word-break: normal;
       overflow-x: auto;
       display: block;
-      font-size: 0.9rem;
-      line-height: 1.8;
     }
 
     .diff-removed {
@@ -515,13 +513,49 @@
         if (Math.abs(ay - by) > 3) return by - ay;
         return a.transform[4] - b.transform[4];
       });
-      let lastY = null;
-      let pageText = '';
+
+      // Group items into lines by Y coordinate
+      const lines = [];
+      let currentLine = null;
       for (const item of sorted) {
         const y = Math.round(item.transform[5]);
-        if (lastY !== null && Math.abs(y - lastY) > 3) pageText += '\n';
-        pageText += item.str;
-        lastY = y;
+        if (!currentLine || Math.abs(y - currentLine.y) > 3) {
+          currentLine = { y, items: [] };
+          lines.push(currentLine);
+        }
+        currentLine.items.push(item);
+      }
+
+      // Find the most common X start position (mode) = normal left margin
+      const xStarts = [];
+      for (const line of lines) {
+        const firstItem = line.items.find(i => i.str.trim());
+        if (firstItem) xStarts.push(Math.round(firstItem.transform[4]));
+      }
+      const xFreq = {};
+      let modeX = xStarts[0] || 0;
+      let modeCount = 0;
+      for (const x of xStarts) {
+        xFreq[x] = (xFreq[x] || 0) + 1;
+        if (xFreq[x] > modeCount) { modeCount = xFreq[x]; modeX = x; }
+      }
+
+      // Build text with indent detection
+      let pageText = '';
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) pageText += '\n';
+        const line = lines[i];
+        const firstItem = line.items.find(it => it.str.trim());
+        if (firstItem) {
+          const x = Math.round(firstItem.transform[4]);
+          // Line starts to the right of the normal margin = paragraph indent
+          if (x > modeX + 5) {
+            pageText += '\u3000';
+          }
+        }
+        for (const item of line.items) {
+          pageText += item.str;
+        }
       }
       return pageText;
     }
@@ -787,9 +821,45 @@
           // ヘッダー情報は使用しない
         }
 
-        // 本文テキスト
+        // 本文テキスト（段落ごとにインデント情報付き）
         const bodyResult = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
         details.bodyText = bodyResult.value;
+
+        // 段落ごとのインデント情報を取得
+        // w:p > w:pPr > w:ind の firstLine / firstLineChars を検出
+        const paragraphs = doc.getElementsByTagNameNS(ns, 'p');
+        const paraTexts = [];
+        for (let pi = 0; pi < paragraphs.length; pi++) {
+          const p = paragraphs[pi];
+          // 段落のテキストを取得
+          const runs = p.getElementsByTagNameNS(ns, 't');
+          let text = '';
+          for (let ri = 0; ri < runs.length; ri++) {
+            text += runs[ri].textContent || '';
+          }
+          if (!text.trim()) continue;
+
+          // 段落のインデント情報を取得
+          const pPr = p.getElementsByTagNameNS(ns, 'pPr')[0];
+          let hasFirstLineIndent = false;
+          if (pPr) {
+            const ind = pPr.getElementsByTagNameNS(ns, 'ind')[0];
+            if (ind) {
+              const fl = ind.getAttribute('w:firstLine') || ind.getAttribute('w:firstLineChars');
+              if (fl && parseInt(fl) > 0) {
+                hasFirstLineIndent = true;
+              }
+            }
+          }
+
+          // テキストが全角スペースで始まっていなくてもインデント設定がある場合は追加
+          if (hasFirstLineIndent && !text.startsWith('\u3000') && !text.startsWith(' ')) {
+            paraTexts.push('\u3000' + text);
+          } else {
+            paraTexts.push(text);
+          }
+        }
+        details.bodyTextWithIndent = paraTexts.join('\n');
 
       } catch (e) {
         console.warn('extractWordDetails error:', e);
@@ -1005,7 +1075,7 @@
     async function extractWordText(file) {
       const arrayBuffer = await file.arrayBuffer();
       const result = await mammoth.extractRawText({ arrayBuffer });
-      return result.value.trim();
+      return result.value.replace(/^[\n\r\t ]+/, '').replace(/[\n\r\t ]+$/, '');
     }
 
     function detectPdfCharsPerLine(pdfLines) {
@@ -1109,7 +1179,7 @@
         }
       }
 
-      return bodyLines.join('\n').trim();
+      return bodyLines.join('\n').replace(/^[\n\r\t ]+/, '').replace(/[\n\r\t ]+$/, '');
     }
 
     function stripCumulativeCounts(text) {
@@ -1129,15 +1199,13 @@
 
       for (const line of lines) {
         if (!line.trim()) continue;
-        const leadingSpaces = line.length - line.trimStart().length;
-        const stripped = line.trim();
-
-        if (leadingSpaces >= 4) {
-          // 段落開始行: 先頭を全角スペースに変換して改行（段落間に空行は入れない）
-          resultLines.push('\u3000' + stripped);
+        // Indentation is now handled during PDF extraction (full-width space inserted)
+        // Just preserve lines as-is, trimming trailing whitespace only
+        if (line.startsWith('\u3000')) {
+          // Line starts with full-width space (indent from PDF extraction)
+          resultLines.push('\u3000' + line.slice(1).replace(/\s+$/, ''));
         } else {
-          // 継続行: 改行を保持したまま追加
-          resultLines.push(stripped);
+          resultLines.push(line.replace(/\s+$/, ''));
         }
       }
 
@@ -1154,7 +1222,7 @@
           const rest = line.slice(indent.length).replace(/[ \t]+/g, ' ').trim();
           return indent + rest;
         })
-        .join('\n').trim();
+        .join('\n').replace(/^[\n\r\t ]+/, '').replace(/[\n\r\t ]+$/, '');
     }
 
     function calcMatchRate(diffs) {
@@ -1234,7 +1302,7 @@
         for (let di = 0; di < displayText.length; di++) {
           const ch = displayText[di];
           if (ch === '\n') {
-            html += isLeft ? '\n' : '<br>';
+            html += '\n';
             continue;
           }
           if (ch === '\u3000') {
@@ -1306,7 +1374,9 @@
         const pdfDisplayText = reconstructPdfParagraphs(cleanPdf);
 
         // ===== Word: 表示用テキスト（charsPerLine字ごとに折り返し）=====
-        const strippedWord = stripHeader(wordText);
+        // インデント情報付きテキストを優先使用
+        const wordBodyText = wordDetails.bodyTextWithIndent || wordText;
+        const strippedWord = stripHeader(wordBodyText);
         const normalizedWord = normalizeText(strippedWord);
         // PDFの文字数設定（rules.charsPerLine）で折り返し
         const cplForWrap = rules.charsPerLine || 30;
