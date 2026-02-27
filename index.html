@@ -201,7 +201,7 @@
 
     @media (max-width: 640px) { .diff-view { grid-template-columns: 1fr; } }
 
-    .diff-panel { background: #0f172a; border-radius: 12px; padding: 16px; overflow: hidden; }
+    .diff-panel { background: #0f172a; border-radius: 12px; padding: 16px; overflow: auto; }
 
     .diff-panel h3 {
       font-size: 0.9rem; color: #94a3b8;
@@ -210,13 +210,13 @@
     }
 
     .diff-content { font-size: 0.9rem; line-height: 1.8; white-space: pre-wrap; word-break: break-all; }
-    /* 左側（模範解答）: 改行をそのまま表示、横スクロール対応 */
+    /* 左側（模範解答）: 改行・インデントをそのまま表示 */
     #diff-left {
       white-space: pre;
       word-break: normal;
       overflow-x: auto;
-      font-family: 'MS Mincho', 'Yu Mincho', '游明朝', serif;
-      font-size: 0.85rem;
+      display: block;
+      font-size: 0.9rem;
       line-height: 1.8;
     }
 
@@ -1172,11 +1172,17 @@
       const rightEl = document.getElementById('diff-right');
       leftEl.innerHTML = ''; rightEl.innerHTML = '';
       for (const part of diffs) {
-        // 改行を <br> に変換して画面に正しく表示
-        const escaped = escapeHtml(part.value).replace(/\n/g, '<br>');
-        if (!part.added && !part.removed) { leftEl.innerHTML += escaped; rightEl.innerHTML += escaped; }
-        else if (part.removed) leftEl.innerHTML += `<span class="diff-removed">${escaped}</span>`;
-        else if (part.added) rightEl.innerHTML += `<span class="diff-added">${escaped}</span>`;
+        // 左側(pre): \n をそのまま使う。右側: <br> に変換
+        const escapedLeft = escapeHtml(part.value);
+        const escapedRight = escapeHtml(part.value).replace(/\n/g, '<br>');
+        if (!part.added && !part.removed) {
+          leftEl.innerHTML += escapedLeft;
+          rightEl.innerHTML += escapedRight;
+        } else if (part.removed) {
+          leftEl.innerHTML += `<span class="diff-removed">${escapedLeft}</span>`;
+        } else if (part.added) {
+          rightEl.innerHTML += `<span class="diff-added">${escapedRight}</span>`;
+        }
       }
     }
 
