@@ -1224,18 +1224,21 @@
         }
       }
 
-      // pdfDisplayTextを文字単位でレンダリング（改行・全角スペースはそのまま、本文文字は差分ハイライト）
+      // displayTextを文字単位でレンダリング
+      // - 改行: 左側は\nそのまま（white-space:preで表示）、右側は<br>に変換
+      // - 全角スペース: 比較テキストに含まれないのでciはインクリメントしない
+      // - 通常文字: 差分ハイライトを適用してciをインクリメント
       function renderText(displayText, ranges, el, isLeft) {
         let html = '';
-        let ci = 0; // compareTextのインデックス
+        let ci = 0;
         for (let di = 0; di < displayText.length; di++) {
           const ch = displayText[di];
           if (ch === '\n') {
-            html += '\n';
+            html += isLeft ? '\n' : '<br>';
             continue;
           }
           if (ch === '\u3000') {
-            // 全角スペース（インデント）: 改行直後の字下げはそのまま表示
+            // 全角スペース（インデント）: 比較テキストに含まれないのでそのまま表示、ciはインクリメントしない
             html += '\u3000';
             continue;
           }
@@ -1251,12 +1254,7 @@
           }
           ci++;
         }
-        if (isLeft) {
-          el.innerHTML = html;
-        } else {
-          // 右側: \n を <br> に変換
-          el.innerHTML = html.replace(/\n/g, '<br>');
-        }
+        el.innerHTML = html;
       }
 
       renderText(pdfDisplayText, pdfRemovedRanges, leftEl, true);
@@ -1307,9 +1305,29 @@
         const cleanPdf = stripCumulativeCounts(strippedPdf);
         const pdfDisplayText = reconstructPdfParagraphs(cleanPdf);
 
-        // ===== Word: 表示用テキスト（段落単位の改行）=====
+        // ===== Word: 表示用テキスト（charsPerLine字ごとに折り返し）=====
         const strippedWord = stripHeader(wordText);
-        const wordDisplayText = normalizeText(strippedWord);
+        const normalizedWord = normalizeText(strippedWord);
+        // PDFの文字数設定（rules.charsPerLine）で折り返し
+        const cplForWrap = rules.charsPerLine || 30;
+        const wordDisplayText = normalizedWord.split('\n').map(para => {
+          if (!para.trim()) return '';
+          // 先頭の全角スペース（インデント）を保持
+          const indent = para.startsWith('\u3000') ? '\u3000' : '';
+          const body = indent ? para.slice(1) : para;
+          // cplForWrap字ごとに改行（先頭行はインデント分も含めてcplForWrap字）
+          const lines = [];
+          let pos = 0;
+          let isFirst = true;
+          while (pos < body.length) {
+            const limit = isFirst ? cplForWrap - (indent ? 1 : 0) : cplForWrap;
+            const chunk = body.slice(pos, pos + limit);
+            lines.push(isFirst ? indent + chunk : chunk);
+            pos += limit;
+            isFirst = false;
+          }
+          return lines.join('\n');
+        }).filter(l => l !== '').join('\n');
 
         // ===== 差分比較用テキスト（改行・インデントを除去して本文のみ比較）=====
         // 改行を除去し、段落間を連結して純粋な文字列として比較
